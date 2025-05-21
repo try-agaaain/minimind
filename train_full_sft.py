@@ -98,10 +98,11 @@ def train_epoch(epoch, wandb):
 def init_model(lm_config):
     tokenizer = AutoTokenizer.from_pretrained('./model/minimind_tokenizer')
     model = MiniMindLM(lm_config)
-    moe_path = '_moe' if lm_config.use_moe else ''
-    ckp = f'./out/pretrain_{lm_config.dim}{moe_path}.pth'
-    state_dict = torch.load(ckp, map_location=args.device)
-    model.load_state_dict(state_dict, strict=False)
+    if lm_config.use_pretrain != '':
+        moe_path = '_moe' if lm_config.use_moe else ''
+        ckp = f'./out/pretrain_{lm_config.dim}{moe_path}.pth'
+        state_dict = torch.load(ckp, map_location=args.device)
+        model.load_state_dict(state_dict, strict=False)
     Logger(f'LLM总参数量：{sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f} 百万')
     model = model.to(args.device)
     return model, tokenizer
@@ -142,10 +143,12 @@ if __name__ == "__main__":
     parser.add_argument('--max_seq_len', default=512, type=int)
     parser.add_argument('--use_moe', default=False, type=bool)
     parser.add_argument("--data_path", type=str, default="./dataset/sft_mini_512.jsonl")
+    parser.add_argument("--pretrain_path", type=str, default='')
 
+    print("GPU is available: ", torch.cuda.is_available())
     args = parser.parse_args()
 
-    lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe)
+    lm_config = LMConfig(dim=args.dim, n_layers=args.n_layers, max_seq_len=args.max_seq_len, use_moe=args.use_moe, pretrain_path=args.pretrain_path)
     args.save_dir = os.path.join(args.out_dir)
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.out_dir, exist_ok=True)

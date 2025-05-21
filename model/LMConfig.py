@@ -32,6 +32,7 @@ class LMConfig(PretrainedConfig):
             aux_loss_alpha: float = 0.1,
             seq_aux: bool = True,
             norm_topk_prob: bool = True,
+            pretrain_path: str = '',
             **kwargs,
     ):
         self.dim = dim
@@ -58,4 +59,5 @@ class LMConfig(PretrainedConfig):
         self.aux_loss_alpha = aux_loss_alpha  # 辅助损失的alpha参数
         self.seq_aux = seq_aux  # 是否在序列级别上计算辅助损失
         self.norm_topk_prob = norm_topk_prob  # 是否标准化top-k概率
+        self.pretrain_path = pretrain_path  # 预训练模型的路径
         super().__init__(**kwargs)

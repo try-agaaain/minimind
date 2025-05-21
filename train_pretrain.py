@@ -66,8 +66,10 @@ def train_epoch(epoch, wandb):
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
+            time_str = time.strftime("%H:%M:%S", time.localtime())
             Logger(
-                'Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.12f} epoch_Time:{}min:'.format(
+                '[{}] Epoch:[{}/{}]({}/{}) loss:{:.3f} lr:{:.12f} epoch_Time:{}min:'.format(
+                    time_str,
                     epoch + 1,
                     args.epochs,
                     step,
@@ -147,6 +149,9 @@ if __name__ == "__main__":
     os.makedirs(args.out_dir, exist_ok=True)
     tokens_per_iter = args.batch_size * lm_config.max_seq_len
     device_type = "cuda" if "cuda" in args.device else "cpu"
+    if device_type == "cpu":
+        print("Error: CPU training is not supported.")
+        exit(0)
 
     args.wandb_run_name = f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
 
