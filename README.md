@@ -2,10 +2,31 @@
 
 这个分支专门用于 MiniMind 模型的微调训练。
 
+## 📚 技术文档
+
+**深入理解 MiniMind 的架构和训练细节，请查看完整技术文档：**
+
+- 📖 **[文档总览](./docs/README.md)** - 文档导航和阅读建议
+- 🏗️ **[模型架构详解](./docs/minimind_architecture.md)** - 深入讲解网络结构和核心技术
+  - RMSNorm 归一化
+  - 旋转位置编码 (RoPE)
+  - 分组查询注意力 (GQA)
+  - 前馈神经网络 (SwiGLU)
+  - 混合专家模型 (MoE)
+- 🎯 **[训练指南](./docs/training_guide.md)** - 全面的训练流程和技巧
+  - 数据处理与 Tokenization
+  - 优化器与学习率调度
+  - 训练技巧（梯度裁剪、混合精度等）
+  - 损失函数与推理生成
+  - 监控与调试
+
+> 💡 **提示**：文档采用 step-by-step 的讲解方式，从技术背景到实现细节，适合有深度学习基础但对 LLM 不够了解的学习者。
+
 ## 文件说明
 
 - `minimind.py`: MiniMind 模型定义文件 (从 master 分支的 model/model_minimind.py 复用)
 - `train.py`: 简洁的模型训练脚本
+- `docs/`: 详细的技术文档
 
 ## 快速开始
 
