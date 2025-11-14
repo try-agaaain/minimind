@@ -56,6 +56,8 @@ LayerNorm 在 Transformer 模型中取得了巨大成功。原始的 Transformer
 
 基于这个洞察，RMSNorm 应运而生。它的定义非常简洁：给定输入向量 $\mathbf{x}$，首先计算其根均方值（Root Mean Square）$\text{RMS}(\mathbf{x}) = \sqrt{\frac{1}{D}\sum_{i=1}^D x_i^2 + \epsilon}$，然后将输入除以这个值进行归一化：$\hat{x}_i = x_i / \text{RMS}(\mathbf{x})$，最后应用可学习的缩放参数：$y_i = \gamma_i \hat{x}_i$。注意，这里通常省略了偏移参数 $\beta$，因为实验表明它的作用不大。
 
+**这种缩放方法会回到开头的内部协变量偏移问题吗？** 这是一个值得思考的问题。表面上看，RMSNorm 只是重新缩放，输入分布的均值仍然会随着训练不断变化。但关键的区别在于：**RMSNorm 稳定的是影响梯度传播的关键因素——方差（或者说尺度）**。前面我们提到，内部协变量偏移的核心危害是导致梯度消失或爆炸。这主要是由输入的**尺度**变化引起的，而不是均值。当每一层的输入方差稳定时，梯度的大小也会保持在合理范围内，避免了爆炸或消失。均值的漂移确实存在，但它对梯度传播的影响要小得多——现代神经网络（特别是带有残差连接的网络）对均值的变化具有相当的鲁棒性。此外，适当的权重初始化（如 He 初始化、Xavier 初始化）也在一定程度上缓解了分布偏移问题。所以 RMSNorm 虽然没有完全消除协变量偏移，但它消除了最关键的那部分——尺度的不稳定性。
+
 RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（Square），再求均值（Mean），最后开平方根（Root）。有趣的是，RMS 与标准差有着密切的联系。回忆标准差的定义 $\sigma = \sqrt{\frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2}$，展开后可以得到 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D x_i^2 - \mu^2$。也就是说，$\text{RMS}^2 = \sigma^2 + \mu^2$。当均值接近零时，RMS 就近似等于标准差。在深度网络中，经过多层变换后，激活值的均值往往确实接近零，这也解释了为什么 RMSNorm 和 LayerNorm 的效果相近。
 
 ## RMSNorm 的实际优势
@@ -70,7 +72,9 @@ RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（
 
 ## 深入数学：RMSNorm 的完整推导
 
-让我们更严格地审视 RMSNorm 的数学形式。给定 D 维向量 $\mathbf{x} = [x_1, x_2, ..., x_D]^T$，RMSNorm 的前向传播可以表示为：
+让我们更严格地审视 RMSNorm 的数学形式，完整地推导它的前向和反向传播过程。理解这些细节有助于我们深入把握 RMSNorm 的工作机理。
+
+**前向传播的三个步骤。** 给定 D 维向量 $\mathbf{x} = [x_1, x_2, ..., x_D]^T$，RMSNorm 执行以下变换：
 
 $$
 \begin{aligned}
@@ -80,21 +84,32 @@ y_i &= \gamma_i \cdot \hat{x}_i
 \end{aligned}
 $$
 
-在向量形式下，这可以写得更简洁：$\text{RMS}(\mathbf{x}) = \sqrt{\frac{\|\mathbf{x}\|_2^2}{D} + \epsilon}$，其中 $\|\mathbf{x}\|_2$ 是 L2 范数。归一化后的向量 $\hat{\mathbf{x}} = \frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}$，最终输出 $\mathbf{y} = \boldsymbol{\gamma} \odot \hat{\mathbf{x}}$，这里 $\odot$ 表示逐元素乘法。
+第一步计算 RMS 值 $r$，它衡量了向量的整体幅度。第二步将每个元素除以 $r$，使得归一化后的向量 $\hat{\mathbf{x}}$ 的 RMS 值为 1（可以验证：$\sum_i \hat{x}_i^2 / D = \sum_i (x_i/r)^2 / D = (\sum_i x_i^2/D) / r^2 = 1$）。第三步应用可学习的缩放，让网络决定每个维度的最佳尺度。
 
-反向传播的推导稍微复杂一些，但对于理解 RMSNorm 的工作原理很重要。假设我们有损失函数 $L$，需要计算 $\frac{\partial L}{\partial x_i}$ 和 $\frac{\partial L}{\partial \gamma_i}$。
+用向量形式表达会更简洁：$\text{RMS}(\mathbf{x}) = \sqrt{\frac{\|\mathbf{x}\|_2^2}{D} + \epsilon}$，其中 $\|\mathbf{x}\|_2$ 是 L2 范数。归一化后的向量 $\hat{\mathbf{x}} = \frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}$，最终输出 $\mathbf{y} = \boldsymbol{\gamma} \odot \hat{\mathbf{x}}$，这里 $\odot$ 表示逐元素乘法。注意到 RMS 本质上是向量 L2 范数的归一化版本，这揭示了 RMSNorm 的几何意义：**将输入向量投影到单位球面上（在 RMS 意义下），然后根据需要缩放**。
 
-对于可学习参数 $\gamma$，梯度很直观：
+**反向传播的推导。** 反向传播需要计算损失 $L$ 对输入 $\mathbf{x}$ 和参数 $\boldsymbol{\gamma}$ 的梯度。
 
-$$\frac{\partial L}{\partial \gamma_i} = \frac{\partial L}{\partial y_i} \cdot \hat{x}_i$$
+对于可学习参数 $\gamma_i$，应用链式法则很直接。因为 $y_i = \gamma_i \hat{x}_i$，所以：
 
-这告诉我们，每个缩放参数的梯度就是输出梯度与归一化后输入的乘积。
+$$\frac{\partial L}{\partial \gamma_i} = \frac{\partial L}{\partial y_i} \cdot \frac{\partial y_i}{\partial \gamma_i} = \frac{\partial L}{\partial y_i} \cdot \hat{x}_i$$
 
-对于输入 $x_i$ 的梯度，我们需要用链式法则。首先，$x_i$ 通过两条路径影响损失：一是直接影响 $\hat{x}_i$，二是通过 $r$ 影响所有的 $\hat{x}_j$。计算 $\frac{\partial \hat{x}_i}{\partial x_i} = \frac{1}{r}$，以及 $\frac{\partial r}{\partial x_i} = \frac{x_i}{Dr}$（这里用到了 $\frac{\partial}{\partial x_i}\sqrt{\frac{1}{D}\sum x_j^2} = \frac{1}{2r} \cdot \frac{2x_i}{D}$）。
+这个梯度告诉我们，$\gamma_i$ 应该朝着输出梯度与归一化输入一致的方向更新——如果这个维度的归一化输入很大且需要增大输出，那 $\gamma_i$ 应该增大。
 
-$r$ 对所有 $\hat{x}_j$ 都有影响，所以 $\frac{\partial L}{\partial r} = \sum_{j=1}^D \frac{\partial L}{\partial \hat{x}_j} \cdot \frac{\partial \hat{x}_j}{\partial r} = \sum_{j=1}^D \frac{\partial L}{\partial \hat{x}_j} \cdot (-\frac{x_j}{r^2}) = -\frac{1}{r^2}\sum_{j=1}^D \frac{\partial L}{\partial \hat{x}_j} \cdot x_j$。
+对于输入 $x_i$，情况更复杂。**关键的洞察是 $x_i$ 通过两条路径影响损失**：
 
-综合起来：
+1. **直接路径**：$x_i$ 直接影响自己归一化后的值 $\hat{x}_i = x_i / r$
+2. **间接路径**：$x_i$ 影响 RMS 值 $r$，而 $r$ 影响**所有**的 $\hat{x}_j$（包括 $\hat{x}_i$ 自己）
+
+先计算各个导数。对直接路径：$\frac{\partial \hat{x}_i}{\partial x_i}\big|_{r固定} = \frac{1}{r}$。对 $r$ 的导数：
+
+$$\frac{\partial r}{\partial x_i} = \frac{\partial}{\partial x_i}\sqrt{\frac{1}{D}\sum_{j=1}^D x_j^2 + \epsilon} = \frac{1}{2r} \cdot \frac{2x_i}{D} = \frac{x_i}{Dr}$$
+
+现在考虑 $r$ 如何影响所有 $\hat{x}_j$。因为 $\hat{x}_j = x_j / r$，所以 $\frac{\partial \hat{x}_j}{\partial r} = -\frac{x_j}{r^2}$。收集所有路径：
+
+$$\frac{\partial L}{\partial r} = \sum_{j=1}^D \frac{\partial L}{\partial \hat{x}_j} \cdot \frac{\partial \hat{x}_j}{\partial r} = -\frac{1}{r^2}\sum_{j=1}^D \frac{\partial L}{\partial \hat{x}_j} \cdot x_j$$
+
+结合两条路径，得到完整的梯度：
 
 $$\frac{\partial L}{\partial x_i} = \frac{\partial L}{\partial \hat{x}_i} \cdot \frac{1}{r} + \frac{\partial L}{\partial r} \cdot \frac{x_i}{Dr}$$
 
