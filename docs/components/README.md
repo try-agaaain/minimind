@@ -44,7 +44,7 @@
 - 对复数旋转数学感兴趣的研究者
 
 **关键洞察**：
-> RoPE 通过旋转变换自然地将相对位置信息编码到注意力计算中。关键性质：$\\langle R_m q, R_n k \\rangle = \\langle q, R_{n-m} k \\rangle$，内积只依赖相对位置 $n-m$。
+> RoPE 通过旋转变换自然地将相对位置信息编码到注意力计算中。关键性质： $\\langle R_m q, R_n k \\rangle = \\langle q, R_{n-m} k \\rangle$，内积只依赖相对位置 $ n-m$。
 
 ---
 
