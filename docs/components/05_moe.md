@@ -216,7 +216,7 @@ if self.training:
     y = (y.view(*topk_weight.shape, -1) * topk_weight.unsqueeze(-1)).sum(dim=1)
 ```
 
-这个实现的关键是 `repeat_interleave`：它将每个 token 复制 $K $ 次（$ K$ 是 top-k 的 k），然后每份由一个选中的专家处理。虽然看起来低效（重复了数据），但这种方式让我们可以使用高效的批量矩阵乘法，而不是逐个处理。
+这个实现的关键是 `repeat_interleave`：它将每个 token 复制 $K$ 次（ $ K $ 是 top-k 的 k），然后每份由一个选中的专家处理。虽然看起来低效（重复了数据），但这种方式让我们可以使用高效的批量矩阵乘法，而不是逐个处理。
 
 ### 推理模式：批次处理专家
 
