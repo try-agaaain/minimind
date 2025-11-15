@@ -34,7 +34,7 @@
 
 **为什么这样能解决 BatchNorm 的问题？** 关键在于统计量的计算方式。LayerNorm 对每个单独的样本，在它的所有特征维度上计算统计量。比如一个 512 维的向量，我们用这 512 个值来计算均值和方差。这个统计量的估计是基于 512 个数值的，远比 BatchNorm 在小 batch 上的几个样本可靠得多。而且，因为是对单个样本进行归一化，batch size 的大小完全不影响结果——即使 batch size = 1，我们仍然有足够的数据（512 个特征值）来计算可靠的统计量。
 
-LayerNorm 的数学表达很简洁。给定一个 D 维的特征向量 $\mathbf{x}$，我们首先计算它的均值 $\mu = \frac{1}{D}\sum_{i=1}^D x_i$ 和方差 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2$，然后对每个元素进行标准化：$\hat{x}_i = (x_i - \mu) / \sqrt{\sigma^2 + \epsilon}$，最后应用可学习的缩放和平移：$y_i = \gamma_i \hat{x}_i + \beta_i$。这里的 $\epsilon$（通常取 $10^{-5}$）是为了数值稳定性而添加的小常数。
+LayerNorm 的数学表达很简洁。给定一个 D 维的特征向量 $\mathbf{x}$ ，我们首先计算它的均值 $\mu = \frac{1}{D}\sum_{i=1}^D x_i$ 和方差 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2$ ，然后对每个元素进行标准化： $\hat{x}_i = (x_i - \mu) / \sqrt{\sigma^2 + \epsilon}$ ，最后应用可学习的缩放和平移： $y_i = \gamma_i \hat{x}_i + \beta_i$ 。这里的 $\epsilon$ （通常取 $10^{-5}$ ）是为了数值稳定性而添加的小常数。
 
 LayerNorm 在 Transformer 模型中取得了巨大成功。原始的 Transformer 论文就采用了 LayerNorm，它被放置在 Multi-Head Attention 和 Feed-Forward Network 的前后（Pre-LN 或 Post-LN 配置）。从此，LayerNorm 成为了 Transformer 架构的标准配置，在 BERT、GPT 等模型中都能看到它的身影。
 
@@ -54,7 +54,7 @@ LayerNorm 在 Transformer 模型中取得了巨大成功。原始的 Transformer
 
 最后，后续的非线性层（激活函数）对均值的变化不如对方差的变化敏感。激活函数如 ReLU 主要关心输入是否大于 0，而不关心输入的平均值是 0 还是 0.5。只要输入的尺度合理（方差稳定），激活函数就能正常工作。
 
-基于这个洞察，RMSNorm 应运而生。它的定义非常简洁：给定输入向量 $\mathbf{x}$，首先计算其根均方值（Root Mean Square）$\text{RMS}(\mathbf{x}) = \sqrt{\frac{1}{D}\sum_{i=1}^D x_i^2 + \epsilon}$，然后将输入除以这个值进行归一化：$\hat{x}_i = x_i / \text{RMS}(\mathbf{x})$，最后应用可学习的缩放参数：$y_i = \gamma_i \hat{x}_i$。注意，这里通常省略了偏移参数 $\beta$，因为实验表明它的作用不大。
+基于这个洞察，RMSNorm 应运而生。它的定义非常简洁：给定输入向量 $\mathbf{x}$ ，首先计算其根均方值（Root Mean Square） $\text{RMS}(\mathbf{x}) = \sqrt{\frac{1}{D}\sum_{i=1}^D x_i^2 + \epsilon}$ ，然后将输入除以这个值进行归一化： $\hat{x}_i = x_i / \text{RMS}(\mathbf{x})$ ，最后应用可学习的缩放参数： $y_i = \gamma_i \hat{x}_i$ 。注意，这里通常省略了偏移参数 $\beta$ ，因为实验表明它的作用不大。
 
 **这种缩放方法会回到开头的内部协变量偏移问题吗？** 这是一个值得思考的问题。表面上看，RMSNorm 只是重新缩放，输入分布的均值仍然会随着训练不断变化。但关键的区别在于：**RMSNorm 稳定的是影响梯度传播的关键因素——方差（或者说尺度）**。
 
@@ -74,7 +74,7 @@ $$
 
 所以 RMSNorm 虽然没有完全消除协变量偏移，但它消除了最关键的那部分——**尺度的不稳定性**，这才是导致梯度问题的主要原因。
 
-RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（Square），再求均值（Mean），最后开平方根（Root）。有趣的是，RMS 与标准差有着密切的联系。回忆标准差的定义 $\sigma = \sqrt{\frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2}$，展开后可以得到 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D x_i^2 - \mu^2$。也就是说，$\text{RMS}^2 = \sigma^2 + \mu^2$。当均值接近零时，RMS 就近似等于标准差。在深度网络中，经过多层变换后，激活值的均值往往确实接近零，这也解释了为什么 RMSNorm 和 LayerNorm 的效果相近。
+RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（Square），再求均值（Mean），最后开平方根（Root）。有趣的是，RMS 与标准差有着密切的联系。回忆标准差的定义 $\sigma = \sqrt{\frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2}$ ，展开后可以得到 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D x_i^2 - \mu^2$ 。也就是说， $\text{RMS}^2 = \sigma^2 + \mu^2$ 。当均值接近零时，RMS 就近似等于标准差。在深度网络中，经过多层变换后，激活值的均值往往确实接近零，这也解释了为什么 RMSNorm 和 LayerNorm 的效果相近。
 
 ## RMSNorm 的实际优势
 
@@ -108,7 +108,7 @@ $$
 
 **为什么 RMS 值为 1 很重要？** 这保证了归一化后的激活值具有统一的尺度。不管原始输入 $\mathbf{x}$ 的幅度是 0.1 还是 100，归一化后的 $\hat{\mathbf{x}}$ 的 RMS 都是 1。这种尺度统一性正是避免梯度消失和爆炸的关键——后续层接收到的输入始终保持在可预测的范围内。第三步应用可学习的缩放参数 $\boldsymbol{\gamma}$，让网络自己决定每个维度的最佳尺度，在统一性和灵活性之间取得平衡。
 
-用向量形式表达会更简洁：$\text{RMS}(\mathbf{x}) = \sqrt{\frac{\|\mathbf{x}\|_2^2}{D} + \epsilon}$，其中 $\|\mathbf{x}\|_2$ 是 L2 范数。归一化后的向量 $\hat{\mathbf{x}} = \frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}$，最终输出 $\mathbf{y} = \boldsymbol{\gamma} \odot \hat{\mathbf{x}}$，这里 $\odot$ 表示逐元素乘法。注意到 RMS 本质上是向量 L2 范数的归一化版本，这揭示了 RMSNorm 的几何意义：**将输入向量投影到单位球面上（在 RMS 意义下），然后根据需要缩放**。
+用向量形式表达会更简洁： $\text{RMS}(\mathbf{x}) = \sqrt{\frac{\|\mathbf{x}\|_2^2}{D} + \epsilon}$ ，其中 $\|\mathbf{x}\|_2$ 是 L2 范数。归一化后的向量 $\hat{\mathbf{x}} = \frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}$ ，最终输出 $\mathbf{y} = \boldsymbol{\gamma} \odot \hat{\mathbf{x}}$ ，这里 $\odot$ 表示逐元素乘法。注意到 RMS 本质上是向量 L2 范数的归一化版本，这揭示了 RMSNorm 的几何意义：**将输入向量投影到单位球面上（在 RMS 意义下），然后根据需要缩放**。
 
 **反向传播的推导。** 反向传播需要计算损失 $L$ 对输入 $\mathbf{x}$ 和参数 $\boldsymbol{\gamma}$ 的梯度。
 
@@ -116,14 +116,14 @@ $$
 
 $$\frac{\partial L}{\partial \gamma_i} = \frac{\partial L}{\partial y_i} \cdot \frac{\partial y_i}{\partial \gamma_i} = \frac{\partial L}{\partial y_i} \cdot \hat{x}_i$$
 
-这个梯度告诉我们，$\gamma_i$ 应该朝着输出梯度与归一化输入一致的方向更新——如果这个维度的归一化输入很大且需要增大输出，那 $\gamma_i$ 应该增大。
+这个梯度告诉我们， $\gamma_i$ 应该朝着输出梯度与归一化输入一致的方向更新——如果这个维度的归一化输入很大且需要增大输出，那 $\gamma_i$ 应该增大。
 
-对于输入 $x_i$，情况更复杂。**关键的洞察是 $x_i$ 通过两条路径影响损失**：
+对于输入 $x_i$ ，情况更复杂。**关键的洞察是 $x_i$ 通过两条路径影响损失**：
 
-1. **直接路径**：$x_i$ 直接影响自己归一化后的值 $\hat{x}_i = x_i / r$
-2. **间接路径**：$x_i$ 影响 RMS 值 $r$，而 $r$ 影响**所有**的 $\hat{x}_j$（包括 $\hat{x}_i$ 自己）
+1. **直接路径**： $x_i$ 直接影响自己归一化后的值 $\hat{x}_i = x_i / r$
+2. **间接路径**： $x_i$ 影响 RMS 值 $r$ ，而 $r$ 影响**所有**的 $\hat{x}_j$ （包括 $\hat{x}_i$ 自己）
 
-先计算各个导数。对直接路径：$\frac{\partial \hat{x}_i}{\partial x_i}\big|_{r固定} = \frac{1}{r}$。对 $r$ 的导数：
+先计算各个导数。对直接路径： $\frac{\partial \hat{x}_i}{\partial x_i}\big|_{r固定} = \frac{1}{r}$ 。对 $r$ 的导数：
 
 $$\frac{\partial r}{\partial x_i} = \frac{\partial}{\partial x_i}\sqrt{\frac{1}{D}\sum_{j=1}^D x_j^2 + \epsilon} = \frac{1}{2r} \cdot \frac{2x_i}{D} = \frac{x_i}{Dr}$$
 
@@ -185,7 +185,7 @@ class RMSNorm(nn.Module):
 
 但也有需要谨慎的场景。如果你要做迁移学习，预训练模型使用的是 LayerNorm，从 LayerNorm 切换到 RMSNorm 可能导致性能下降，需要重新调参甚至重新训练。对于小规模模型，加速效果不明显，LayerNorm 已经足够快，切换的收益可能不值得。
 
-超参数方面，epsilon（$\epsilon$）的选择有讲究。常用值是 1e-5 或 1e-6。**为什么需要 epsilon？** 当所有输入都接近 0 时，$\sum x_i^2$ 也接近 0，开方后的值很小，除以一个很小的数会导致数值爆炸。epsilon 确保分母不会太小，保证数值稳定。但 epsilon 太大会影响归一化效果——如果 epsilon 远大于 $\sum x_i^2$，归一化就失效了。1e-5 是一个很好的平衡点，足够小以不影响正常情况，又足够大以防止极端情况下的数值问题。
+超参数方面，epsilon（ $\epsilon$ ）的选择有讲究。常用值是 1e-5 或 1e-6。**为什么需要 epsilon？** 当所有输入都接近 0 时， $\sum x_i^2$ 也接近 0，开方后的值很小，除以一个很小的数会导致数值爆炸。epsilon 确保分母不会太小，保证数值稳定。但 epsilon 太大会影响归一化效果——如果 epsilon 远大于 $\sum x_i^2$ ，归一化就失效了。1e-5 是一个很好的平衡点，足够小以不影响正常情况，又足够大以防止极端情况下的数值问题。
 
 ## 总结与展望
 
