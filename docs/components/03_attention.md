@@ -20,12 +20,49 @@ $$
 \text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right) V
 $$
 
-**为什么 Q、K、V 可以建模 token 之间的关系？** 这个机制的巧妙之处在于：
-- **Query（查询）**：表示当前位置"想要什么信息"，是一个需求的表达
-- **Key（键）**：表示每个位置"能提供什么信息"，是一个内容的索引
-- **Value（值）**：表示每个位置"实际包含的信息"，是真正要传递的内容
+**为什么 Q、K、V 可以建模 token 之间的关系？** 让我们从数学角度深入理解这个机制。
 
-通过计算 $QK^T$，我们度量了"需求与供给的匹配度"——如果某个位置的 key 与当前位置的 query 相似度高，说明那个位置的信息对当前位置很重要。Softmax 将这些相似度转化为注意力权重（归一化的概率分布），然后用这些权重对 value 进行加权求和，实现了信息的选择性聚合。这样，每个 token 都可以根据其他 token 的内容动态地调整自己的表示，从而建模 token 间的复杂关系。
+对于输入序列 $X = [\mathbf{x}_1, \mathbf{x}_2, ..., \mathbf{x}_n]$，每个 token 的表示 $\mathbf{x}_i \in \mathbb{R}^d$ 经过三个不同的线性变换：
+
+$$
+\begin{aligned}
+\mathbf{q}_i &= \mathbf{x}_i W^Q \quad &\text{（Query：当前位置的"查询向量"）} \\
+\mathbf{k}_j &= \mathbf{x}_j W^K \quad &\text{（Key：其他位置的"键向量"）} \\
+\mathbf{v}_j &= \mathbf{x}_j W^V \quad &\text{（Value：其他位置的"值向量"）}
+\end{aligned}
+$$
+
+**第一步：计算注意力分数**。位置 $i$ 的 query 与位置 $j$ 的 key 的内积衡量了它们的相关性：
+
+$$
+\text{score}_{ij} = \frac{\mathbf{q}_i^T \mathbf{k}_j}{\sqrt{d_k}} = \frac{(\mathbf{x}_i W^Q)^T (\mathbf{x}_j W^K)}{\sqrt{d_k}} = \frac{\mathbf{x}_i^T (W^Q)^T W^K \mathbf{x}_j}{\sqrt{d_k}}
+$$
+
+这个内积本质上是在一个由 $(W^Q)^T W^K$ 定义的度量空间中计算两个 token 表示的相似度。**关键洞察**：不同的 $W^Q$ 和 $W^K$ 定义了不同的"相似性空间"——它们决定了模型认为哪些类型的 token 关系是重要的。例如：
+- 某组权重可能学习到"主语-谓语"的关系，使得主语的 query 与对应谓语的 key 有高相似度
+- 另一组权重可能学习到"修饰-被修饰"的关系，使得形容词的 query 与名词的 key 匹配
+
+**第二步：归一化为注意力权重**。Softmax 将分数转化为概率分布：
+
+$$
+\alpha_{ij} = \frac{\exp(\text{score}_{ij})}{\sum_{k=1}^{n} \exp(\text{score}_{ik})} = \frac{\exp\left(\frac{\mathbf{q}_i^T \mathbf{k}_j}{\sqrt{d_k}}\right)}{\sum_{k=1}^{n} \exp\left(\frac{\mathbf{q}_i^T \mathbf{k}_k}{\sqrt{d_k}}\right)}
+$$
+
+这确保了 $\sum_{j=1}^{n} \alpha_{ij} = 1$，即位置 $i$ 对所有位置的注意力权重之和为 1。$\alpha_{ij}$ 表示位置 $i$ 应该从位置 $j$ 获取多少信息。
+
+**第三步：加权聚合信息**。最终输出是所有位置 value 的加权和：
+
+$$
+\mathbf{output}_i = \sum_{j=1}^{n} \alpha_{ij} \mathbf{v}_j = \sum_{j=1}^{n} \alpha_{ij} (\mathbf{x}_j W^V)
+$$
+
+这个公式揭示了注意力机制如何建模 token 关系：位置 $i$ 的输出不再只依赖于 $\mathbf{x}_i$ 本身，而是融合了序列中所有其他位置的信息，融合的程度由注意力权重 $\alpha_{ij}$ 控制。数学上，我们可以将其写为：
+
+$$
+\mathbf{output}_i = \sum_{j=1}^{n} \underbrace{\frac{\exp\left(\mathbf{x}_i^T (W^Q)^T W^K \mathbf{x}_j / \sqrt{d_k}\right)}{\sum_{k} \exp\left(\mathbf{x}_i^T (W^Q)^T W^K \mathbf{x}_k / \sqrt{d_k}\right)}}_{\text{关系强度（基于内容相似度）}} \cdot \underbrace{(\mathbf{x}_j W^V)}_{\text{要传递的信息}}
+$$
+
+这个公式清晰地展示了：**token 之间的关系由输入内容 $\mathbf{x}_i, \mathbf{x}_j$ 和可学习的投影矩阵 $W^Q, W^K, W^V$ 共同决定**。模型通过学习这些投影矩阵，自动发现数据中的关系模式（如语法依存、语义关联等），无需人工定义规则。
 
 这个机制让模型能够动态地决定每个位置应该关注序列中的哪些部分。但它有一个根本性的局限：**一组投影矩阵 $W^Q, W^K, W^V$ 只能学习一种"关注模式"**。
 
