@@ -58,23 +58,44 @@ LayerNorm 在 Transformer 模型中取得了巨大成功。原始的 Transformer
 
 **这种缩放方法会回到开头的内部协变量偏移问题吗？** 这是一个值得思考的问题。表面上看，RMSNorm 只是重新缩放，输入分布的均值仍然会随着训练不断变化。但关键的区别在于：**RMSNorm 稳定的是影响梯度传播的关键因素——方差（或者说尺度）**。
 
-让我们从数学上看这个问题。假设第 $l$ 层的输出为 $h^{(l)}$，经过 RMSNorm 后得到 $\hat{h}^{(l)}$。在反向传播时，梯度 $\frac{\partial L}{\partial h^{(l)}}$ 会受到 $\hat{h}^{(l)}$ 的影响。关键观察是：
+让我们从数学上看这个问题。假设输入向量为 $\mathbf{x} = [x_1, x_2, ..., x_D]^T$，经过 RMSNorm 后得到 $\hat{\mathbf{x}}$。在反向传播时，梯度 $\frac{\partial L}{\partial \mathbf{x}}$ 会受到 $\hat{\mathbf{x}}$ 的影响。关键观察是：
 
 $$
-\text{Var}(\hat{h}^{(l)}) = \text{Var}\left(\frac{h^{(l)}}{\text{RMS}(h^{(l)})}\right) \approx \text{constant}
+\begin{aligned}
+\text{Var}(\hat{\mathbf{x}}) &= \text{Var}\left(\frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}\right) \\
+&= \frac{1}{D}\sum_{i=1}^{D}\left(\frac{x_i}{\text{RMS}(\mathbf{x})}\right)^2 - \left(\frac{1}{D}\sum_{i=1}^{D}\frac{x_i}{\text{RMS}(\mathbf{x})}\right)^2 \\
+&= \frac{1}{D \cdot \text{RMS}^2(\mathbf{x})}\sum_{i=1}^{D}x_i^2 - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \\
+&= \frac{1}{\text{RMS}^2(\mathbf{x})} - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \\
+&= 1 - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \approx 1
+\end{aligned}
 $$
 
-即使 $h^{(l)}$ 的均值在训练中变化，RMSNorm 保证了 $\hat{h}^{(l)}$ 的方差保持稳定（约为 1）。梯度的传播主要受方差影响：
+最后一步的近似成立是因为在深度网络中，激活值的均值通常远小于 RMS 值。这说明即使 $\mathbf{x}$ 的均值在训练中变化，RMSNorm 保证了 $\hat{\mathbf{x}}$ 的方差保持稳定（约为 1）。梯度的传播主要受方差影响：
 
 $$
-\left\|\frac{\partial L}{\partial h^{(l)}}\right\| \propto \left\|\frac{\partial L}{\partial \hat{h}^{(l)}}\right\| \cdot \frac{1}{\text{RMS}(h^{(l)})}
+\begin{aligned}
+\left\|\frac{\partial L}{\partial \mathbf{x}}\right\| &\propto \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \left\|\frac{\partial \hat{\mathbf{x}}}{\partial \mathbf{x}}\right\| \\
+&\propto \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \frac{1}{\text{RMS}(\mathbf{x})}
+\end{aligned}
 $$
 
-由于 $\text{RMS}(h^{(l)})$ 被归一化到合理范围，梯度不会因为激活值的尺度变化而爆炸或消失。相比之下，均值的漂移 $\mathbb{E}[h^{(l)}]$ 对梯度传播的影响很小——在链式法则中，梯度主要依赖激活值的相对变化（导数），而不是绝对位置（均值）。现代神经网络（特别是带有残差连接的网络）对均值的变化具有相当的鲁棒性：残差连接 $h^{(l+1)} = h^{(l)} + f(h^{(l)})$ 允许梯度直接绕过归一化层，即使均值漂移也不会阻断梯度流。
+由于 $\text{RMS}(\mathbf{x})$ 被归一化到合理范围，梯度不会因为激活值的尺度变化而爆炸或消失。相比之下，均值的漂移 $\mathbb{E}[\mathbf{x}]$ 对梯度传播的影响很小——在链式法则中，梯度主要依赖激活值的相对变化（导数），而不是绝对位置（均值）。现代神经网络（特别是带有残差连接的网络）对均值的变化具有相当的鲁棒性：残差连接允许梯度直接绕过归一化层，即使均值漂移也不会阻断梯度流。
 
 所以 RMSNorm 虽然没有完全消除协变量偏移，但它消除了最关键的那部分——**尺度的不稳定性**，这才是导致梯度问题的主要原因。
 
-RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（Square），再求均值（Mean），最后开平方根（Root）。有趣的是，RMS 与标准差有着密切的联系。回忆标准差的定义 $\sigma = \sqrt{\frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2}$ ，展开后可以得到 $\sigma^2 = \frac{1}{D}\sum_{i=1}^D x_i^2 - \mu^2$ 。也就是说， $\text{RMS}^2 = \sigma^2 + \mu^2$ 。当均值接近零时，RMS 就近似等于标准差。在深度网络中，经过多层变换后，激活值的均值往往确实接近零，这也解释了为什么 RMSNorm 和 LayerNorm 的效果相近。
+RMSNorm 这个名字很好地描述了它的计算过程：先对输入平方（Square），再求均值（Mean），最后开平方根（Root）。有趣的是，RMS 与标准差有着密切的联系。回忆标准差的定义 $\sigma = \sqrt{\frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2}$ ，展开平方项可以得到：
+
+$$
+\begin{aligned}
+\sigma^2 &= \frac{1}{D}\sum_{i=1}^D (x_i - \mu)^2 \\
+&= \frac{1}{D}\sum_{i=1}^D (x_i^2 - 2x_i\mu + \mu^2) \\
+&= \frac{1}{D}\sum_{i=1}^D x_i^2 - 2\mu \cdot \frac{1}{D}\sum_{i=1}^D x_i + \mu^2 \\
+&= \frac{1}{D}\sum_{i=1}^D x_i^2 - 2\mu^2 + \mu^2 \\
+&= \frac{1}{D}\sum_{i=1}^D x_i^2 - \mu^2
+\end{aligned}
+$$
+
+也就是说， $\text{RMS}^2 = \frac{1}{D}\sum_{i=1}^D x_i^2 = \sigma^2 + \mu^2$ 。当均值接近零时，RMS 就近似等于标准差。在深度网络中，经过多层变换后，激活值的均值往往确实接近零，这也解释了为什么 RMSNorm 和 LayerNorm 的效果相近。
 
 ## RMSNorm 的实际优势
 
