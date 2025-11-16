@@ -21,8 +21,11 @@ class Trainer:
     
     def __init__(self, args):
         self.args = args
+        # 设置GPU设备编号
+        if args.gpu_ids:
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_ids
         self.device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-        print(f"设备: {self.device}")
+        print(f"设备: {self.device} ", f"{args.gpu_ids}")
         
         # 初始化tokenizer
         tokenizer_path = args.tokenizer_path
@@ -49,6 +52,11 @@ class Trainer:
             use_moe=args.use_moe
         )
         self.model = MiniMindForCausalLM(config).to(self.device)
+        
+        # 多GPU支持
+        if args.device == "cuda" and torch.cuda.device_count() > 1:
+            print(f"使用 DataParallel 进行多GPU训练，可用GPU数: {torch.cuda.device_count()}")
+            self.model = nn.DataParallel(self.model)
         
         # 初始化 epoch
         self.epoch = 0
@@ -132,12 +140,16 @@ class Trainer:
         output_dir = Path(self.args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # 处理DataParallel模型的state_dict
+        model_state = self.model.module.state_dict() if isinstance(self.model, nn.DataParallel) else self.model.state_dict()
         checkpoint = {
-            "model_state": self.model.state_dict(),
+            "model_state": model_state,
             "epoch": epoch
         }
         torch.save(checkpoint, output_dir / "minimind_model.pt")
-        self.model.config.save_pretrained(str(output_dir))
+        # 获取原始模型配置
+        model = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        model.config.save_pretrained(str(output_dir))
         self.tokenizer.save_pretrained(str(output_dir / "tokenizer"))
         print(f"✅ 已保存到: {output_dir}")
 
@@ -182,6 +194,7 @@ def main():
     parser.add_argument("--pretrained_path", type=str, default=None)
     parser.add_argument("--output_dir", type=str, default="./output")
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--gpu_ids", type=str, default=None, help="GPU设备编号，如'0,1'用于多GPU训练")
     parser.add_argument("--num_workers", type=int, default=2)
     
     args = parser.parse_args()
