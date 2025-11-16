@@ -144,12 +144,13 @@ class NovelDatasetPreparator:
     def __init__(
         self,
         dataset_dir: str = "./dataset",
+        pretrain_path: str = "./dataset/pretrain.jsonl",
         chunk_size: int = 1024,
         chunk_overlap: int = 128,
         tokenizer_path: Optional[str] = None
     ):
         self.dataset_dir = Path(dataset_dir)
-        self.output_path = Path(tokenizer_path)
+        self.pretrain_path = Path(pretrain_path)
         
         # 初始化 tokenizer
         tokenizer_file = Path(tokenizer_path) if tokenizer_path else None
@@ -184,7 +185,7 @@ class NovelDatasetPreparator:
         novels = self.get_novel_files()
         print(f"📚 找到 {len(novels)} 个小说文件")
         
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.pretrain_path.parent.mkdir(parents=True, exist_ok=True)
         
         # 如果tokenizer未初始化，则先训练
         if self.tokenizer is None:
@@ -201,7 +202,7 @@ class NovelDatasetPreparator:
                 # 使用新的函数进行训练和保存
                 self.tokenizer = train_and_save_tokenizer(
                     files=temp_files,
-                    save_path=str(self.output_path.parent / "tokenizer"),
+                    save_path=str(self.pretrain_path.parent / "tokenizer"),
                     vocab_size=6400
                 )
             
@@ -210,7 +211,7 @@ class NovelDatasetPreparator:
                 os.unlink(f)
         
         # 编码并保存
-        with open(self.output_path, 'w', encoding='utf-8') as out_f:
+        with open(self.pretrain_path, 'w', encoding='utf-8') as out_f:
             for novel_path in tqdm(novels, desc="处理"):
                 text = self.load_novel_text(novel_path)
                 if text is None:
@@ -224,7 +225,7 @@ class NovelDatasetPreparator:
                         "source": novel_path.name,
                     }, ensure_ascii=False) + '\n')
         
-        print(f"✅ 数据集已保存: {self.output_path}")
+        print(f"✅ 数据集已保存: {self.pretrain_path}")
 
 
 class MinimindDataset(Dataset):

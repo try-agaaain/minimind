@@ -34,6 +34,7 @@ class Trainer:
             print(f"   使用示例数据进行演示训练")
             preparator = NovelDatasetPreparator(
                 dataset_dir=args.dataset_dir,
+                pretrain_path=args.pretrain_path,
                 chunk_size=args.chunk_size,
                 chunk_overlap=args.chunk_overlap,
                 tokenizer_path=args.tokenizer_path
@@ -163,6 +164,7 @@ def main():
     parser.add_argument("--chunk_overlap", type=int, default=128)
     parser.add_argument("--vocab_size", type=int, default=6400)
     parser.add_argument("--tokenizer_path", type=str, default="./dataset/tokenizer")
+    parser.add_argument("--pretrain_path", type=str, default="./dataset/pretrain.jsonl")
     
     # 模型配置
     parser.add_argument("--hidden_size", type=int, default=512)

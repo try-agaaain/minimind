@@ -3,7 +3,7 @@ set -e
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-[ ! -d "dataset" ] && git submodule update --init --recursive
+git submodule update --init --recursive
 
 # 默认参数
 EPOCHS=${1:-5}
