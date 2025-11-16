@@ -8,18 +8,18 @@ EPOCHS=${1:-5}
 BATCH_SIZE=${2:-8}
 LEARNING_RATE=${3:-1e-4}
 DEVICE=${4:-cuda}
+SAVE_INTERVAL=${5:-1}
+RESUME=${6:-0}
 
-echo "📚 创建数据集..."
-python3 dataset.py
-
-echo "🚀 训练模型..."
 python3 train.py \
-    --epochs "$EPOCHS" \
-    --batch_size "$BATCH_SIZE" \
-    --learning_rate "$LEARNING_RATE" \
-    --device "$DEVICE" \
-    --use_jsonl \
-    --use_scheduler
+    --epochs "$EPOCHS"  \
+    --batch_size "$BATCH_SIZE"  \
+    --learning_rate "$LEARNING_RATE"  \
+    --device "$DEVICE"  \
+    --save_interval "$SAVE_INTERVAL"  \
+    --use_jsonl  \
+    --use_scheduler  \
+    --resume_from_checkpoint
 
 echo "✅ 完成！输出: ./output/"
 

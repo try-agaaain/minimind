@@ -1,0 +1,30 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+    //     python3 train.py \
+    // --epochs "$EPOCHS" \
+    // --batch_size "$BATCH_SIZE" \
+    // --learning_rate "$LEARNING_RATE" \
+    // --device "$DEVICE" \
+    // --use_jsonl \
+    // --use_scheduler
+        {
+                "name": "train",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/train.py",
+                "args": [
+                    "--epochs", "3",
+                    "--batch_size", "8",
+                    "--learning_rate", "5e-5",
+                    "--device", "cuda",
+                    "--use_jsonl",
+                    "--use_scheduler"
+                ],
+                "console": "integratedTerminal"
+        }
+    ]
+}
