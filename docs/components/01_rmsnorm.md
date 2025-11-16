@@ -65,21 +65,30 @@ $$
 \text{Var}(\hat{\mathbf{x}}) &= \text{Var}\left(\frac{\mathbf{x}}{\text{RMS}(\mathbf{x})}\right) \\
 &= \frac{1}{D}\sum_{i=1}^{D}\left(\frac{x_i}{\text{RMS}(\mathbf{x})}\right)^2 - \left(\frac{1}{D}\sum_{i=1}^{D}\frac{x_i}{\text{RMS}(\mathbf{x})}\right)^2 \\
 &= \frac{1}{D \cdot \text{RMS}^2(\mathbf{x})}\sum_{i=1}^{D}x_i^2 - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \\
-&= \frac{1}{\text{RMS}^2(\mathbf{x})} - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \\
+
 &= 1 - \left(\frac{\mathbb{E}[\mathbf{x}]}{\text{RMS}(\mathbf{x})}\right)^2 \approx 1
 \end{aligned}
 $$
 
-最后一步的近似成立是因为在深度网络中，激活值的均值通常远小于 RMS 值。这说明即使 $\mathbf{x}$ 的均值在训练中变化，RMSNorm 保证了 $\hat{\mathbf{x}}$ 的方差保持稳定（约为 1）。梯度的传播主要受方差影响：
+最后一步的近似成立是因为在深度网络中，激活值的均值通常远小于 RMS 值。因此有一个重要的关系式：
+
+$$\text{RMS}^2(\mathbf{x}) = \frac{1}{D}\sum_{i=1}^D x_i^2 = \sigma^2 + \mu^2 \approx \sigma^2$$
+
+当 $|\mathbb{E}[\mathbf{x}]| \ll \text{RMS}(\mathbf{x})$ 时，RMS 值本质上就等于标准差。这意味着：**RMSNorm 稳定的 RMS 值，同时也稳定了方差（标准差）**。
+
+现在我们可以清楚地看到梯度如何受到稳定方差的保护。在反向传播中，根据链式法则：
 
 $$
 \begin{aligned}
 \left\|\frac{\partial L}{\partial \mathbf{x}}\right\| &\propto \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \left\|\frac{\partial \hat{\mathbf{x}}}{\partial \mathbf{x}}\right\| \\
-&\propto \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \frac{1}{\text{RMS}(\mathbf{x})}
+&\propto \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \frac{1}{\text{RMS}(\mathbf{x})} \\
+&\approx \left\|\frac{\partial L}{\partial \hat{\mathbf{x}}}\right\| \cdot \frac{1}{\sigma(\mathbf{x})}
 \end{aligned}
 $$
 
-由于 $\text{RMS}(\mathbf{x})$ 被归一化到合理范围，梯度不会因为激活值的尺度变化而爆炸或消失。相比之下，均值的漂移 $\mathbb{E}[\mathbf{x}]$ 对梯度传播的影响很小——在链式法则中，梯度主要依赖激活值的相对变化（导数），而不是绝对位置（均值）。现代神经网络（特别是带有残差连接的网络）对均值的变化具有相当的鲁棒性：残差连接允许梯度直接绕过归一化层，即使均值漂移也不会阻断梯度流。
+**这就是方差稳定性的作用**：由于 RMSNorm 将方差固定在 1（即 $\sigma \approx 1$），梯度的缩放因子 $\frac{1}{\text{RMS}(\mathbf{x})}$ 也被固定在合理范围内，梯度不会因为激活值的尺度变化而爆炸或消失。
+
+相比之下，均值的漂移 $\mathbb{E}[\mathbf{x}]$ 对梯度传播的影响很小——在链式法则中，梯度主要依赖激活值的相对变化（方差/标准差），而不是绝对位置（均值）。现代神经网络（特别是带有残差连接的网络）对均值的变化具有相当的鲁棒性：残差连接允许梯度直接绕过归一化层，即使均值漂移也不会阻断梯度流。
 
 所以 RMSNorm 虽然没有完全消除协变量偏移，但它消除了最关键的那部分——**尺度的不稳定性**，这才是导致梯度问题的主要原因。
 

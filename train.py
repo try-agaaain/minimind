@@ -1,182 +1,201 @@
 """
-简单的MiniMind模型训练脚本
+MiniMind 训练脚本 - 精简高效实现
 """
+import os
+import json
+import argparse
+from pathlib import Path
+
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from tqdm import tqdm
+
 from minimind import MiniMindConfig, MiniMindForCausalLM
-import argparse
-import os
+from tokenizer import SimpleCharTokenizer
+from dataset import MinimindDataset, SimpleTextDataset
 
 
-class SimpleTextDataset(Dataset):
-    """简单的文本数据集"""
-    def __init__(self, data, max_length=512):
-        self.data = data
-        self.max_length = max_length
+class Trainer:
+    """MiniMind 训练器"""
     
-    def __len__(self):
-        return len(self.data)
-    
-    def __getitem__(self, idx):
-        text = self.data[idx]
-        # 简单的tokenization (实际使用时应该使用tokenizer)
-        tokens = [ord(c) % 6400 for c in text[:self.max_length]]
-        # 填充到固定长度
-        if len(tokens) < self.max_length:
-            tokens = tokens + [0] * (self.max_length - len(tokens))
+    def __init__(self, args):
+        self.args = args
+        self.device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+        print(f"🖥️  设备: {self.device}")
         
-        input_ids = torch.tensor(tokens[:-1], dtype=torch.long)
-        labels = torch.tensor(tokens[1:], dtype=torch.long)
-        return input_ids, labels
-
-
-def train(args):
-    """训练函数"""
-    # 设置设备
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    print(f"使用设备: {device}")
-    
-    # 创建模型配置
-    config = MiniMindConfig(
-        hidden_size=args.hidden_size,
-        num_hidden_layers=args.num_layers,
-        num_attention_heads=args.num_heads,
-        vocab_size=args.vocab_size,
-        max_position_embeddings=args.max_seq_len,
-        dropout=args.dropout,
-        use_moe=args.use_moe
-    )
-    
-    # 初始化模型
-    print("初始化模型...")
-    model = MiniMindForCausalLM(config)
-    model = model.to(device)
-    
-    # 如果有预训练权重，加载它
-    if args.pretrained_path and os.path.exists(args.pretrained_path):
-        print(f"加载预训练权重: {args.pretrained_path}")
-        state_dict = torch.load(args.pretrained_path, map_location=device)
-        model.load_state_dict(state_dict, strict=False)
-    
-    # 准备示例数据（实际使用时应该从文件加载）
-    sample_texts = [
-        "Hello, this is a simple training example.",
-        "MiniMind is a small language model.",
-        "We are training the model with some sample data.",
-        "This is just for demonstration purposes."
-    ] * 100  # 重复数据以便训练
-    
-    # 创建数据集和数据加载器
-    dataset = SimpleTextDataset(sample_texts, max_length=args.max_seq_len)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=args.batch_size, 
-        shuffle=True,
-        num_workers=args.num_workers
-    )
-    
-    # 设置优化器
-    optimizer = torch.optim.AdamW(
-        model.parameters(), 
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay
-    )
-    
-    # 损失函数
-    criterion = nn.CrossEntropyLoss()
-    
-    # 训练循环
-    print(f"\n开始训练 {args.epochs} 个epoch...")
-    model.train()
-    
-    for epoch in range(args.epochs):
-        total_loss = 0
-        for batch_idx, (input_ids, labels) in enumerate(dataloader):
-            input_ids = input_ids.to(device)
-            labels = labels.to(device)
-            
-            # 前向传播
-            outputs = model(input_ids)
-            logits = outputs.logits
-            
-            # 计算损失
-            loss = criterion(
-                logits.view(-1, config.vocab_size),
-                labels.view(-1)
-            )
-            
-            # 如果使用MoE，添加辅助损失
-            if hasattr(outputs, 'aux_loss') and outputs.aux_loss is not None:
-                loss = loss + outputs.aux_loss
-            
-            # 反向传播
-            optimizer.zero_grad()
-            loss.backward()
-            
-            # 梯度裁剪
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            
-            # 更新参数
-            optimizer.step()
-            
-            total_loss += loss.item()
-            
-            # 打印训练信息
-            if (batch_idx + 1) % args.log_interval == 0:
-                avg_loss = total_loss / (batch_idx + 1)
-                print(f"Epoch [{epoch+1}/{args.epochs}], "
-                      f"Step [{batch_idx+1}/{len(dataloader)}], "
-                      f"Loss: {loss.item():.4f}, "
-                      f"Avg Loss: {avg_loss:.4f}")
+        # 初始化tokenizer
+        if args.tokenizer_path and os.path.exists(args.tokenizer_path):
+            self.tokenizer = SimpleCharTokenizer.load(args.tokenizer_path)
+        else:
+            self.tokenizer = SimpleCharTokenizer(vocab_size=args.vocab_size)
         
-        # Epoch结束后保存模型
-        if (epoch + 1) % args.save_interval == 0:
-            os.makedirs(args.output_dir, exist_ok=True)
-            save_path = os.path.join(args.output_dir, f"model_epoch_{epoch+1}.pth")
-            torch.save(model.state_dict(), save_path)
-            print(f"模型已保存到: {save_path}")
+        # 初始化模型
+        config = MiniMindConfig(
+            hidden_size=args.hidden_size,
+            num_hidden_layers=args.num_layers,
+            num_attention_heads=args.num_heads,
+            vocab_size=self.tokenizer.get_vocab_size(),
+            max_position_embeddings=args.max_seq_len,
+            dropout=args.dropout,
+            use_moe=args.use_moe
+        )
+        
+        self.model = MiniMindForCausalLM(config)
+        self.model.to(self.device)
+        
+        # 加载预训练权重
+        if args.pretrained_path and os.path.exists(args.pretrained_path):
+            state_dict = torch.load(args.pretrained_path, map_location=self.device)
+            self.model.load_state_dict(state_dict, strict=False)
+        
+        # 初始化优化器
+        self.optimizer = AdamW(
+            self.model.parameters(),
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+        
+        # 学习率调度器
+        self.scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=args.epochs,
+            eta_min=args.min_lr,
+        ) if args.use_scheduler else None
+        
+        # 初始化数据加载器
+        if args.use_jsonl and os.path.exists(args.data_path):
+            dataset = MinimindDataset(args.data_path, max_length=args.max_seq_len)
+        else:
+            texts = [
+                "这是一个简单的训练示例。",
+                "MiniMind 是一个小语言模型。",
+                "我们正在使用示例数据进行训练。",
+                "语言模型通过预测下一个token来学习。",
+            ] * (args.batch_size * 10)
+            dataset = SimpleTextDataset(texts, self.tokenizer, max_length=args.max_seq_len)
+        
+        self.dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=True if self.device.type == 'cuda' else False
+        )
+        
+        self.criterion = nn.CrossEntropyLoss(ignore_index=0)
     
-    # 保存最终模型
-    final_path = os.path.join(args.output_dir, "model_final.pth")
-    torch.save(model.state_dict(), final_path)
-    print(f"\n训练完成! 最终模型已保存到: {final_path}")
+    def train(self):
+        """执行训练"""
+        print("\n" + "="*60)
+        print("🚀 开始训练...")
+        print("="*60 + "\n")
+        
+        self.model.train()
+        
+        for epoch in range(self.args.epochs):
+            print(f"📊 Epoch {epoch + 1}/{self.args.epochs}")
+            
+            total_loss = 0.0
+            num_batches = 0
+            
+            with tqdm(total=len(self.dataloader), desc="训练进度") as pbar:
+                for input_ids, labels in self.dataloader:
+                    input_ids = input_ids.to(self.device)
+                    labels = labels.to(self.device)
+                    
+                    # 前向传播
+                    outputs = self.model(input_ids)
+                    loss = self.criterion(
+                        outputs.logits.view(-1, self.model.config.vocab_size),
+                        labels.view(-1)
+                    )
+                    
+                    # 反向传播
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    
+                    if self.args.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.grad_clip)
+                    
+                    self.optimizer.step()
+                    
+                    total_loss += loss.item()
+                    num_batches += 1
+                    
+                    avg_loss = total_loss / num_batches
+                    pbar.update(1)
+                    pbar.set_postfix({"loss": f"{avg_loss:.4f}"})
+            
+            # 更新学习率
+            if self.scheduler:
+                self.scheduler.step()
+            
+            print(f"   ✅ Epoch 平均损失: {total_loss / num_batches:.4f}\n")
+        
+        # 保存模型
+        self._save_model()
+    
+    def _save_model(self):
+        """保存模型"""
+        print("\n" + "="*60)
+        print("💾 保存模型...")
+        print("="*60)
+        
+        output_dir = Path(self.args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 保存模型权重
+        torch.save(self.model.state_dict(), output_dir / "minimind_model.pt")
+        
+        # 保存配置
+        self.model.config.save_pretrained(str(output_dir))
+        
+        # 保存tokenizer
+        self.tokenizer.save(str(output_dir / "tokenizer.pkl"))
+        
+        print(f"✅ 模型已保存到: {output_dir}")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MiniMind简单训练脚本")
+def main():
+    parser = argparse.ArgumentParser()
     
     # 模型配置
-    parser.add_argument("--hidden_size", type=int, default=512, help="隐藏层维度")
-    parser.add_argument("--num_layers", type=int, default=8, help="隐藏层数量")
-    parser.add_argument("--num_heads", type=int, default=8, help="注意力头数量")
-    parser.add_argument("--vocab_size", type=int, default=6400, help="词表大小")
-    parser.add_argument("--max_seq_len", type=int, default=512, help="最大序列长度")
-    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout率")
-    parser.add_argument("--use_moe", type=int, default=0, choices=[0, 1], help="是否使用MoE (0=否, 1=是)")
+    parser.add_argument("--hidden_size", type=int, default=512)
+    parser.add_argument("--num_layers", type=int, default=8)
+    parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--vocab_size", type=int, default=6400)
+    parser.add_argument("--max_seq_len", type=int, default=512)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--use_moe", action="store_true")
     
     # 训练配置
-    parser.add_argument("--epochs", type=int, default=3, help="训练轮数")
-    parser.add_argument("--batch_size", type=int, default=4, help="批次大小")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="学习率")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="权重衰减")
-    parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪")
-    parser.add_argument("--num_workers", type=int, default=0, help="数据加载线程数")
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--learning_rate", type=float, default=1e-4)
+    parser.add_argument("--min_lr", type=float, default=1e-6)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--use_scheduler", action="store_true")
+    
+    # 数据配置
+    parser.add_argument("--use_jsonl", action="store_true")
+    parser.add_argument("--data_path", type=str, default="./dataset/pretrain.jsonl")
+    parser.add_argument("--tokenizer_path", type=str, default=None)
     
     # 其他配置
-    parser.add_argument("--device", type=str, default="cuda:0", help="训练设备")
-    parser.add_argument("--output_dir", type=str, default="./output", help="模型保存目录")
-    parser.add_argument("--pretrained_path", type=str, default="", help="预训练权重路径")
-    parser.add_argument("--log_interval", type=int, default=10, help="日志打印间隔")
-    parser.add_argument("--save_interval", type=int, default=1, help="模型保存间隔(epoch)")
+    parser.add_argument("--pretrained_path", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default="./output")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--num_workers", type=int, default=2)
     
     args = parser.parse_args()
     
-    print("=" * 50)
-    print("MiniMind 训练配置:")
-    print("=" * 50)
-    for arg, value in vars(args).items():
-        print(f"{arg}: {value}")
-    print("=" * 50)
-    
-    train(args)
+    trainer = Trainer(args)
+    trainer.train()
+
+
+if __name__ == "__main__":
+    main()
