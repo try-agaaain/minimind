@@ -43,8 +43,7 @@ class Trainer:
         tokenizer_path = args.tokenizer_path
         # 只有 rank 0 检查并准备文件
         if not os.path.exists(tokenizer_path) and self.rank == 0:
-            print(f"⚠️  Tokenizer 路径不存在: {tokenizer_path}")
-            print(f"   使用示例数据进行演示训练")
+            print(f"⚠️  Tokenizer 路径不存在: {tokenizer_path}，对数据集进行词元处理")
             preparator = NovelDatasetPreparator(
                 dataset_dir=args.dataset_dir,
                 pretrain_path=args.pretrain_path,

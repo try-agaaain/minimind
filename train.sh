@@ -5,7 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 git submodule update --init --recursive
 
-torchrun --nproc_per_node=2 train.py --use_jsonl --data_path ./dataset/pretrain.jsonl
+uv run torchrun --nproc_per_node=2 train.py --use_jsonl --data_path ./dataset/pretrain.jsonl --epochs 150 --save_interval 15 --batch_size 16
 
 # 默认参数
 EPOCHS=${1:-5}

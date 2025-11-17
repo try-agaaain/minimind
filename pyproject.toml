@@ -11,4 +11,6 @@ dependencies = [
     "tqdm>=4.67.1",
     "transformers>=4.57.1",
     "tokenizers>=0.14.0",
+    "kaggle>=1.7.4.5",
+    "tiktoken>=0.12.0",
 ]

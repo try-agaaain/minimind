@@ -6,7 +6,7 @@ from dataset import MiniMindTokenizerFast
 
 class Chat:
     def __init__(self, model_path="./output/minimind_model.pt", 
-                 tokenizer_path="./output", device="cuda"):
+                 tokenizer_path="dataset/tokenizer", device="cuda"):
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.tokenizer = MiniMindTokenizerFast.from_pretrained(tokenizer_path)
         self.config = MiniMindConfig(vocab_size=self.tokenizer.vocab_size)

@@ -4,7 +4,7 @@ MiniMind 数据集处理 - 使用 langchain-text-splitters 和 torch Dataset
 import json
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Iterator
 
 import torch
 from torch.utils.data import Dataset
@@ -14,7 +14,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import os
 
 from transformers import PreTrainedTokenizerFast, AutoTokenizer
-from tokenizers import BertWordPieceTokenizer, Tokenizer
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
 
 class MiniMindTokenizerFast(PreTrainedTokenizerFast):
     """
@@ -71,6 +71,7 @@ class MiniMindTokenizerFast(PreTrainedTokenizerFast):
         Returns:
             MiniMindTokenizerFast: 加载的 tokenizer 实例
         """
+        # tokenizer = AutoTokenizer.from_pretrained("google-bert/bert-base-uncased")
         tokenizer = super().from_pretrained(model_id_or_path, **kwargs)
         print(f"✅ 已加载 (词表大小: {tokenizer.vocab_size})")
         return tokenizer
@@ -84,10 +85,9 @@ def train_and_save_tokenizer(
     files: List[str],
     save_path: str,
     vocab_size: int = 6400,
-    min_frequency: int = 2
 ) -> MiniMindTokenizerFast:
     """
-    训练分词器并保存（包括 tokenizer.json 和 tokenizer_config.json）
+    使用 BPE 算法训练分词器并保存（包括 tokenizer.json 和 tokenizer_config.json）
     
     Args:
         files: 训练文本文件列表
@@ -102,41 +102,47 @@ def train_and_save_tokenizer(
     if not files:
         raise ValueError("没有找到有效的训练文件")
 
-    # 1. 初始化原始的 BertWordPiece Tokenizer
-    tokenizer = BertWordPieceTokenizer(
-        clean_text=True,
-        handle_chinese_chars=True,
-        lowercase=True,
-    )
+    # 1. 初始化 BPE Tokenizer
+    tokenizer = Tokenizer(models.BPE())
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
 
     special_tokens = ["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"]
 
     print(f"📚 训练分词器 ({len(files)} 个文件)...")
     
-    # 2. 训练分词器
+    # 2. 配置 BPE 训练器
+    trainer = trainers.BpeTrainer(
+        vocab_size=vocab_size,
+        special_tokens=special_tokens,
+        show_progress=True,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
+    )
+    
+    # 3. 从文件列表训练
     tokenizer.train(
         files=files,
-        vocab_size=vocab_size,
-        min_frequency=min_frequency,
-        special_tokens=special_tokens,
+        trainer=trainer
     )
+    
+    # 4. 设置解码器
+    tokenizer.decoder = decoders.ByteLevel()
     
     print(f"✅ 训练完成 (词表大小: {tokenizer.get_vocab_size()})")
 
-    # 3. 保存底层文件 (tokenizer.json)
+    # 5. 保存底层文件 (tokenizer.json)
     if save_path:
         Path(save_path).mkdir(parents=True, exist_ok=True)
         tokenizer.save(str(Path(save_path) / "tokenizer.json"), pretty=True)
         print(f"💾 已保存到: {save_path}/tokenizer.json")
 
-    # 2. 创建 MiniMindTokenizerFast 实例
-    tokenizer = MiniMindTokenizerFast(tokenizer_object=tokenizer)
+    # 6. 创建 MiniMindTokenizerFast 实例
+    fast_tokenizer = MiniMindTokenizerFast(tokenizer_object=tokenizer)
     
-    # 3. 保存配置文件（生成 tokenizer_config.json）
-    tokenizer.save_pretrained(save_path)
+    # 7. 保存配置文件（生成 tokenizer_config.json）
+    fast_tokenizer.save_pretrained(save_path)
     print(f"✅ 分词器已保存到: {save_path}")
     
-    return tokenizer
+    return fast_tokenizer
 
 class NovelDatasetPreparator:
     """小说数据集准备器 - 文本分割 -> tokenization -> JSONL"""
