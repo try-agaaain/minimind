@@ -1,0 +1,651 @@
+# 分词技术：从字符到子词的演进之路
+
+分词（Tokenization）是自然语言处理和大语言模型中最基础但又极其关键的组件。在模型能够理解和生成文本之前，我们必须先将原始文本转换成模型可以处理的数字序列。这个看似简单的转换过程，实际上蕴含着深刻的设计权衡和技术创新。
+
+## 为什么需要分词？
+
+深度学习模型无法直接处理文本字符串——它们只能处理数字。因此，我们需要一种方法将文本转换成数字序列，同时保留足够的信息让模型能够理解文本的含义。这就是分词的核心任务。
+
+**分词要解决的根本问题是**：如何在有限的词表大小和充分的语义表达之间找到平衡？这个问题比看起来要复杂得多。
+
+### 词表大小的困境
+
+假设我们决定用"单词"作为基本单位，为每个不同的单词分配一个唯一的ID。这种方法很直观，但会遇到严重的问题。
+
+**词表爆炸**。自然语言中的单词数量是巨大的。英语中常用单词可能有几万个，但如果要覆盖所有可能的单词（包括专业术语、人名地名、新词等），词表可能需要数百万条目。更糟糕的是，这个数字会随着语言的发展不断增长。在多语言场景下，这个问题更加严重——中文、日文等语言的"词"的定义本身就不明确。
+
+**未登录词（OOV）问题**。无论词表多大，总会遇到训练时没见过的新词。传统方法是用特殊的 `<UNK>` token 替代，但这会丢失信息。例如，"COVID-19" 在2019年之前的任何模型中都是未登录词，但如果简单地替换成 `<UNK>`，模型就无法理解这个关键信息。
+
+**稀疏性和泛化**。许多单词出现频率很低，模型很难学习到它们的良好表示。更关键的是，词与词之间的语义关系可能无法被捕捉。例如，"run"、"running"、"runner"、"ran" 在语义上紧密相关，但如果把它们当作完全独立的词，模型需要分别学习，无法共享知识。
+
+**那么，另一个极端呢？** 如果用字符作为基本单位，词表会很小（英文只需26个字母加一些标点），永远不会有OOV问题。但这带来了新的挑战：
+
+**序列过长**。字符级编码会使序列变得很长。一个100词的句子可能变成500个字符。这不仅增加计算开销，更重要的是增加了建模的难度——模型需要从字符组合中学习词义，这是一个更复杂的任务。
+
+**语义稀疏**。单个字符几乎不携带语义信息。"c-a-t" 三个字符只有组合在一起才表示"猫"的概念。模型必须学会在每个位置识别字符序列的边界并提取语义，这大大增加了学习的难度。
+
+## 子词分词：优雅的中间道路
+
+子词（Subword）分词是在单词级和字符级之间找到的一个平衡点。**核心思想**是：将常见的单词保留为完整单位，同时将罕见词分解成更小的、有意义的片段。
+
+这种方法同时解决了词表爆炸和OOV问题：
+- 用较小的词表（通常几万个token）就能覆盖绝大多数文本
+- 任何新词都可以被分解成已知的子词单元，不会出现OOV
+- 相关词可以共享子词（如 "play"、"playing"、"player" 共享 "play"），促进泛化
+
+## BPE：从数据压缩到分词的灵感
+
+字节对编码（Byte Pair Encoding，BPE）原本是一种数据压缩算法，由 Philip Gage 在1994年提出。它的思想极其简单：**迭代地合并文本中最频繁出现的字符对，用一个新符号替代它们**。
+
+### BPE 的基本原理
+
+让我们通过一个具体例子理解 BPE 的工作流程。假设我们有以下语料：
+
+```
+low low low low low
+lower lower
+newest newest newest newest newest newest
+widest widest widest
+```
+
+**初始化**：将所有单词拆分成字符，并在末尾加上特殊符号 `</w>` 标记词边界：
+
+```
+l o w </w>: 5
+l o w e r </w>: 2
+n e w e s t </w>: 6
+w i d e s t </w>: 3
+```
+
+这里的数字表示每个词出现的频率。词边界标记很重要，它帮助我们区分单词结尾的字符和单词中间的字符。例如，"low" 中的 'w' 和 "lower" 中的 'w' 的语义角色不同——前者是词尾，后者在词中间。
+
+**迭代合并**：
+
+**第一轮**：统计所有相邻字符对的频率。最频繁的是什么？让我们数一数：
+- 'l o': 5 + 2 = 7 次
+- 'o w': 5 + 2 = 7 次
+- 'e s': 6 + 3 = 9 次
+- 'e w': 6 次
+- 's t': 6 + 3 = 9 次
+
+'e s' 和 's t' 都出现9次，假设我们选择 'e s'。合并后：
+
+```
+l o w </w>: 5
+l o w e r </w>: 2
+n e w es t </w>: 6
+w i d es t </w>: 3
+```
+
+现在 "es" 被视为一个单独的token。注意我们创建了一个新的符号 "es"，词表中增加了这个条目。
+
+**第二轮**：重新统计，现在 's t' 不再是 's' + 't'，而是 'es' + 't'。最频繁的可能是：
+- 'es t': 6 + 3 = 9 次
+- 'l o': 7 次
+- 'o w': 7 次
+
+选择 'es t'：
+
+```
+l o w </w>: 5
+l o w e r </w>: 2
+n e w est </w>: 6
+w i d est </w>: 3
+```
+
+**继续迭代**，直到达到预定的词表大小（例如10000个token）或合并次数。每次合并，我们都在词表中增加一个新的、更长的子词单元。
+
+### 为什么 BPE 有效？
+
+BPE 的美妙之处在于它的**数据驱动性**。它不需要语言学知识，完全从数据中学习哪些字符序列应该被视为一个单元。频繁出现的序列会被优先合并，这自然对应了语言中的常见词汇和词根。
+
+**词根和词缀的自然发现**。在英语中，BPE 通常会学到：
+- 常见前缀：un-, re-, pre-, de-
+- 常见后缀：-ing, -ed, -er, -est, -tion
+- 完整的高频词：the, and, of, to
+
+例如，"unbelievable" 可能被分成 "un" + "believ" + "able"。这种分解既减小了词表大小，又保留了语义信息——"un-" 表示否定，"-able" 表示"可以...的"。
+
+**跨语言的适用性**。BPE 对任何语言都适用，因为它不依赖语言特定的规则。对于中文，它可能学到常见的字和字符组合；对于德语，它可能学到复合词的组成部分。
+
+### BPE 的编码过程
+
+训练完成后，我们得到一个合并规则列表，按应用顺序排列。编码新文本时：
+
+1. 将文本拆分成字符序列
+2. 按顺序应用所有合并规则
+3. 最终的token序列就是编码结果
+
+例如，对于单词 "lowest"（假设没在训练数据中出现）：
+
+```
+初始: l o w e s t </w>
+
+应用规则 "e s" -> "es": l o w es t </w>
+应用规则 "es t" -> "est": l o w est </w>
+应用规则 "o w" -> "ow": l ow est </w>
+应用规则 "l ow" -> "low": low est </w>
+
+最终: [low] [est] [</w>]
+```
+
+即使 "lowest" 是新词，BPE 也能将其分解成已知的子词 "low" 和 "est"，这两个子词在 "low" 和 "newest" 中已经学到。模型可以从这两个子词的表示组合出 "lowest" 的语义。
+
+### 实现细节
+
+一个简化的 BPE 训练实现：
+
+```python
+from collections import defaultdict, Counter
+import re
+
+def get_stats(vocab):
+    """统计所有相邻token对的频率"""
+    pairs = defaultdict(int)
+    for word, freq in vocab.items():
+        symbols = word.split()
+        for i in range(len(symbols) - 1):
+            pairs[symbols[i], symbols[i+1]] += freq
+    return pairs
+
+def merge_vocab(pair, vocab):
+    """在词表中合并指定的token对"""
+    new_vocab = {}
+    bigram = ' '.join(pair)
+    replacement = ''.join(pair)
+    
+    for word in vocab:
+        # 将 "a b" 替换成 "ab"
+        new_word = word.replace(bigram, replacement)
+        new_vocab[new_word] = vocab[word]
+    return new_vocab
+
+def train_bpe(text, num_merges):
+    """训练 BPE"""
+    # 初始化：拆分成字符，添加词边界标记
+    vocab = defaultdict(int)
+    for word in text.split():
+        word = ' '.join(list(word)) + ' </w>'
+        vocab[word] += 1
+    
+    # 记录合并操作
+    merges = []
+    
+    for i in range(num_merges):
+        pairs = get_stats(vocab)
+        if not pairs:
+            break
+        
+        # 找到最频繁的对
+        best_pair = max(pairs, key=pairs.get)
+        
+        # 执行合并
+        vocab = merge_vocab(best_pair, vocab)
+        merges.append(best_pair)
+        
+        print(f"合并 #{i+1}: {best_pair} (出现 {pairs[best_pair]} 次)")
+    
+    return merges, vocab
+
+# 示例
+text = "low " * 5 + "lower " * 2 + "newest " * 6 + "widest " * 3
+merges, final_vocab = train_bpe(text, num_merges=10)
+
+print("\n最终词表:")
+for word, freq in sorted(final_vocab.items()):
+    print(f"{word}: {freq}")
+```
+
+**为什么要记录合并顺序？** 因为编码时必须按照训练时的顺序应用合并规则。如果顺序错误，可能产生不同的分词结果。例如，假设我们有规则 "a b" -> "ab" 和 "ab c" -> "abc"，对于序列 "a b c"：
+- 正确顺序：先 "a b" -> "ab"，再 "ab c" -> "abc"，结果是 ["abc"]
+- 错误顺序：无法应用 "ab c"，结果是 ["ab", "c"]
+
+### BPE 的局限性
+
+尽管 BPE 很优雅，但它也有一些不足：
+
+**贪心策略的次优性**。BPE 每次选择当前最频繁的字符对进行合并，这是一个贪心算法。它不保证全局最优——可能存在更好的合并顺序，能够用更少的token更好地表示语料。
+
+**对训练数据的敏感性**。如果训练数据不平衡，某些领域的词可能被过度分割。例如，如果训练数据主要是通用文本，医学术语可能会被分成很小的片段，影响效果。
+
+**不考虑语义**。BPE 纯粹基于频率，不考虑语义。它可能合并没有语义关系的字符序列，只是因为它们经常一起出现。
+
+## WordPiece：为语言模型优化的改进
+
+WordPiece 是 Google 开发的分词算法，用于 BERT 等模型。它的核心思想与 BPE 类似——迭代合并字符对——但有一个关键区别：**合并的标准不是频率，而是语言模型的似然度**。
+
+### 似然度优先的合并策略
+
+BPE 问的是："哪个字符对出现得最多？" WordPiece 问的是："合并哪个字符对能最大化训练数据的语言模型概率？"
+
+更具体地说，对于每个候选字符对 $(x, y)$，WordPiece 计算：
+
+$$
+\text{score}(x, y) = \frac{P(xy)}{P(x) \cdot P(y)}
+$$
+
+这个公式衡量的是：$x$ 和 $y$ 一起出现的概率，相比于它们独立出现的概率，有多大的提升？
+
+**为什么这个公式有意义？** 如果 $x$ 和 $y$ 在语料中经常一起出现，且这种共现不是偶然（即 $P(xy) > P(x) \cdot P(y)$），那么它们可能构成一个有意义的语言单元，应该被合并。
+
+这个比值也被称为"点互信息"（Pointwise Mutual Information, PMI）的一个变体。PMI 衡量两个事件的相关性：
+- 如果 $\text{score} > 1$：$x$ 和 $y$ 正相关，倾向于一起出现
+- 如果 $\text{score} = 1$：$x$ 和 $y$ 独立
+- 如果 $\text{score} < 1$：$x$ 和 $y$ 负相关，倾向于不一起出现
+
+选择 score 最高的字符对进行合并，意味着我们优先合并那些"意外地"经常一起出现的序列——这些序列更可能是有意义的语言单元。
+
+### 与 BPE 的对比
+
+**理论优势**：WordPiece 的似然度标准比 BPE 的频率标准更符合语言模型的目标。我们最终要用这些 token 训练语言模型，那么选择能最大化语言模型性能的分词方式是合理的。
+
+**实践中的差异**：在很多情况下，WordPiece 和 BPE 产生的词表非常相似。这是因为高频字符对往往也有高 PMI——常见的搭配通常是有意义的语言单元。但在边界情况下，WordPiece 可能做出更好的选择。
+
+例如，假设在某个语料中，"th" 出现100次，"xy" 出现90次。BPE 会优先合并 "th"。但如果 "xy" 总是一起出现（PMI 很高），而 "t" 和 "h" 也经常单独出现（PMI 较低），WordPiece 可能会选择 "xy"。
+
+### WordPiece 的特殊标记
+
+WordPiece 使用 `##` 前缀标记非词首的子词。例如：
+
+```
+playing -> play ##ing
+unbelievable -> un ##bel ##iev ##able
+```
+
+**为什么需要这个标记？** 它帮助模型区分子词在词中的位置。"play" 单独出现和作为 "playing" 的一部分，语义角色不同。前缀标记提供了这个上下文信息。
+
+在解码时，去掉 `##` 前缀并连接所有 token，就能恢复原始文本：
+
+```
+["play", "##ing"] -> "play" + "ing" -> "playing"
+```
+
+### 实现示例
+
+WordPiece 的训练稍微复杂，因为需要估计语言模型概率：
+
+```python
+import math
+from collections import defaultdict
+
+def estimate_probabilities(vocab):
+    """估计单个token和token对的概率"""
+    total = sum(vocab.values())
+    token_freq = defaultdict(int)
+    pair_freq = defaultdict(int)
+    
+    for word, freq in vocab.items():
+        symbols = word.split()
+        # 统计单个token
+        for symbol in symbols:
+            token_freq[symbol] += freq
+        # 统计相邻token对
+        for i in range(len(symbols) - 1):
+            pair = (symbols[i], symbols[i+1])
+            pair_freq[pair] += freq
+    
+    # 计算概率
+    token_prob = {t: f / total for t, f in token_freq.items()}
+    pair_prob = {p: f / total for p, f in pair_freq.items()}
+    
+    return token_prob, pair_prob
+
+def compute_pair_scores(token_prob, pair_prob):
+    """计算所有字符对的PMI分数"""
+    scores = {}
+    for (x, y), p_xy in pair_prob.items():
+        p_x = token_prob.get(x, 1e-10)
+        p_y = token_prob.get(y, 1e-10)
+        # PMI: log(P(x,y) / (P(x) * P(y)))
+        # 这里直接用比值
+        scores[(x, y)] = p_xy / (p_x * p_y)
+    return scores
+
+def train_wordpiece(text, num_merges):
+    """训练 WordPiece"""
+    # 初始化
+    vocab = defaultdict(int)
+    for word in text.split():
+        # 第一个token不加前缀，其余加 ##
+        chars = list(word)
+        word_tokens = [chars[0]] + ['##' + c for c in chars[1:]] + ['</w>']
+        word_str = ' '.join(word_tokens)
+        vocab[word_str] += 1
+    
+    merges = []
+    
+    for i in range(num_merges):
+        # 计算概率和分数
+        token_prob, pair_prob = estimate_probabilities(vocab)
+        scores = compute_pair_scores(token_prob, pair_prob)
+        
+        if not scores:
+            break
+        
+        # 选择分数最高的字符对
+        best_pair = max(scores, key=scores.get)
+        
+        # 执行合并
+        vocab = merge_vocab(best_pair, vocab)
+        merges.append(best_pair)
+        
+        print(f"合并 #{i+1}: {best_pair} (分数: {scores[best_pair]:.4f})")
+    
+    return merges, vocab
+```
+
+## SentencePiece：端到端的通用方案
+
+SentencePiece 是 Google 开发的一个更现代的分词工具，被 LLaMA、T5 等模型广泛使用。它的设计理念与前面的方法有本质不同。
+
+### 语言无关的设计哲学
+
+BPE 和 WordPiece 都假设文本可以先被拆分成单词，然后再进一步分解。但这个假设在很多语言中不成立：
+
+**中文、日文等语言没有明确的词边界**。"我爱北京天安门" 这个句子没有空格，如何分词？传统方法需要先用分词工具（如 jieba）将其分成 "我 爱 北京 天安门"，但分词本身就是一个困难的问题，而且分词错误会传播到后续步骤。
+
+**即使在英语中，预分词也有问题**。标点如何处理？"don't" 应该是一个词还是 "don" + "'t"？"New York" 是一个词还是两个？不同的预处理策略会导致不同的结果，增加了系统的复杂性。
+
+SentencePiece 的解决方案：**完全跳过预分词步骤，直接在原始文本上工作**。它将文本视为 Unicode 字符序列，空格也只是一个普通字符（用特殊符号 ▁ 表示）。
+
+### 将空格视为普通字符
+
+这个看似简单的设计选择有深远的影响。例如，句子 "Hello world" 在 SentencePiece 中表示为：
+
+```
+[▁Hello] [▁world]
+```
+
+这里 ▁ 表示空格。这样做的好处：
+
+**解码简单**。只需要将所有 token 连接起来，把 ▁ 替换回空格，就能恢复原文：
+
+```python
+tokens = ['▁Hello', '▁world']
+text = ''.join(tokens).replace('▁', ' ')
+# 结果: " Hello world"
+```
+
+注意开头有一个空格，需要去掉。但这比处理词边界标记要简单得多。
+
+**语言无关**。中文 "我爱你" 和英文 "I love you" 用同样的方式处理。没有特殊的中文分词器，没有英文词干提取器，所有语言统一对待。
+
+**字符级回退**。任何 Unicode 字符都可以作为 token，所以永远不会有 OOV。即使遇到从未见过的 emoji 或罕见汉字，SentencePiece 也能处理。
+
+### Unigram 语言模型分词
+
+SentencePiece 支持多种分词算法，其中最有特色的是 **Unigram 语言模型** 方法。这个方法的思路与 BPE/WordPiece 完全相反：
+
+- **BPE/WordPiece**：从小（字符）开始，逐渐合并成大（子词）
+- **Unigram**：从大（大量候选子词）开始，逐渐删减到小（精简的词表）
+
+### Unigram 方法的原理
+
+**核心思想**：假设我们有一个候选子词词表 $V$，每个子词 $x$ 有一个概率 $P(x)$。对于任意文本 $S$，可能有多种分词方式。例如，"unbelievable" 可以分成：
+
+1. [un] [believable]
+2. [un] [be] [liev] [able]
+3. [u] [n] [bel] [i] [ev] [able]
+...
+
+每种分词方式的概率是各个子词概率的乘积（假设子词独立）：
+
+$$
+P(x_1, x_2, ..., x_m) = \prod_{i=1}^{m} P(x_i)
+$$
+
+我们的目标是找到**最可能的分词方式**：
+
+$$
+\mathbf{x}^* = \arg\max_{\mathbf{x} \in S(X)} P(\mathbf{x}) = \arg\max_{\mathbf{x}} \prod_{i=1}^{m} P(x_i)
+$$
+
+其中 $S(X)$ 是输入 $X$ 的所有可能分词方式的集合。
+
+**如何找到最优分词？** 暴力枚举所有可能性是不可行的（指数级复杂度）。幸运的是，我们可以用**动态规划**（Viterbi 算法）高效地求解。
+
+设 $\text{DP}[i]$ 为前 $i$ 个字符的最优分词的对数概率，则：
+
+$$
+\text{DP}[i] = \max_{x \in V, \text{ } x \text{ ends at } i} \left( \text{DP}[i - |x|] + \log P(x) \right)
+$$
+
+这个递推公式的含义是：前 $i$ 个字符的最优分词，可以通过枚举最后一个子词 $x$（结束于位置 $i$），然后加上前面部分的最优解来计算。
+
+**训练过程**：
+
+1. **初始化大词表**：从训练语料中提取所有可能的子串作为候选（通常用某种启发式规则，如频率阈值）
+2. **EM 迭代优化**：
+   - **E 步**：用当前词表和概率，对所有训练文本进行最优分词
+   - **M 步**：根据分词结果，重新估计每个子词的概率
+3. **剪枝**：每次迭代后，删除对总体似然度贡献最小的若干子词，逐渐缩小词表
+
+**为什么删除某些子词不会破坏覆盖率？** 因为任何文本都可以退化到字符级分词。即使删除了某个子词，文本仍然可以用更细粒度的子词表示，只是可能不那么高效。
+
+### Unigram vs BPE
+
+**Unigram 的优势**：
+
+- **概率化**：每个 token 有明确的概率，可以计算整个句子的似然度
+- **多样性**：可以采样不同的分词方式（根据概率分布），用于数据增强
+- **理论基础**：基于明确的语言模型目标优化，而不是贪心启发式
+
+**BPE 的优势**：
+
+- **简单**：算法更直观，实现更简单
+- **确定性**：给定文本的分词方式是唯一的，便于调试
+- **高效**：训练速度通常更快
+
+在实践中，两者的效果往往相近，选择哪个更多取决于工程考虑和个人偏好。
+
+### SentencePiece 实现示例
+
+使用 SentencePiece 非常简单：
+
+```python
+import sentencepiece as spm
+
+# 训练模型
+spm.SentencePieceTrainer.train(
+    input='corpus.txt',
+    model_prefix='tokenizer',
+    vocab_size=8000,
+    model_type='unigram',  # 或 'bpe'
+    character_coverage=0.9995,  # 覆盖99.95%的字符
+    pad_id=0,
+    unk_id=1,
+    bos_id=2,
+    eos_id=3,
+)
+
+# 加载并使用
+sp = spm.SentencePieceProcessor(model_file='tokenizer.model')
+
+text = "Hello world! 这是一个测试。"
+tokens = sp.encode(text, out_type=str)
+print(f"Tokens: {tokens}")
+# 可能输出: ['▁Hello', '▁world', '!', '▁这是', '▁一个', '▁测试', '。']
+
+ids = sp.encode(text, out_type=int)
+print(f"IDs: {ids}")
+
+# 解码
+decoded = sp.decode(ids)
+print(f"Decoded: {decoded}")
+# 输出: "Hello world! 这是一个测试。"
+```
+
+**参数说明**：
+
+- `vocab_size`：最终词表大小
+- `model_type`：'unigram'、'bpe'、'char' 或 'word'
+- `character_coverage`：字符覆盖率，对于多语言很重要。设为0.9995意味着覆盖99.95%的字符，极罕见字符被当作 `<unk>`
+- `pad_id`、`unk_id`、`bos_id`、`eos_id`：特殊token的ID
+
+## 实际应用中的考虑
+
+### 词表大小的选择
+
+词表大小是一个关键的超参数，涉及多方面的权衡：
+
+**更大的词表**：
+- 优点：每个 token 包含更多信息，序列更短，训练和推理更快
+- 缺点：嵌入矩阵和输出层更大，增加参数量和显存；每个 token 的训练样本更少，可能学习不充分
+
+**更小的词表**：
+- 优点：参数更少，每个 token 有更多训练样本，表示更robust
+- 缺点：序列更长，计算开销更大
+
+**经验法则**：
+- 小模型（< 1B 参数）：词表 32K - 50K
+- 中等模型（1B - 10B）：词表 50K - 100K
+- 大模型（> 10B）：词表 100K - 256K
+
+LLaMA 使用 32K，GPT-3 使用 50K，BERT 使用 30K，T5 使用 32K。一个常见的选择是 32K，因为它是 2 的幂次，对硬件友好。
+
+### 处理数字和特殊符号
+
+数字的分词是一个有趣的问题。考虑数字 "12345"：
+
+**按位数字分词**：`['1', '2', '3', '4', '5']`
+- 优点：词表小，所有数字都能表示
+- 缺点：长数字序列很长，模型难以理解数字的整体含义
+
+**按完整数字分词**：`['12345']`
+- 优点：保留数字的完整性
+- 缺点：词表爆炸（所有可能的数字都需要一个token），无法泛化到未见过的数字
+
+**折中方案**：混合策略
+- 常见小数字（0-999）保留为整体
+- 大数字分解成片段，如 `['123', '45']` 或按千位分隔 `['12', ',' ,'345']`
+
+GPT 系列模型采用了一个有趣的策略：将数字的每一位单独分词，但带上位置信息（如十位、百位）。这样可以用少量 token 表示任意大小的数字。
+
+**特殊符号**（如 `@`、`#`、`$`）通常保留为独立 token，因为它们在不同上下文中有特殊含义（如 @username、#hashtag、$100）。
+
+### 多语言分词
+
+在多语言场景中，分词更加复杂：
+
+**共享词表 vs 独立词表**：
+- **共享词表**：所有语言用同一个词表，促进跨语言知识迁移，但可能导致某些语言的表示质量下降（资源少的语言分配的 token 更少）
+- **独立词表**：每种语言单独训练，针对性强，但不利于跨语言学习
+
+**字符覆盖率**：不同语言的字符集大小差异很大。英语只需26个字母，中文需要数千个常用字。设置合适的 `character_coverage` 很重要，避免把常用字符标记为 `<unk>`。
+
+**脚本归一化**：有些字符在不同 Unicode 编码中有多个表示（如全角/半角）。训练前进行归一化可以减少冗余，提高效率。
+
+### 特殊 Token 的设计
+
+除了普通的子词 token，分词器通常需要一些特殊 token：
+
+- `<pad>`：填充token，用于将不同长度的序列补齐到同一长度
+- `<unk>`：未知token，表示不在词表中的符号（虽然子词分词理论上没有 OOV，但实践中仍保留 `<unk>` 以防万一）
+- `<bos>` / `<eos>`：句首/句尾token，标记序列的开始和结束
+- `<cls>` / `<sep>`：分类/分隔token，用于特定任务（如 BERT 的句对分类）
+- `<mask>`：掩码token，用于掩码语言模型训练
+
+这些特殊 token 的 ID 通常被固定在词表的开头（如 0-10），便于特殊处理。
+
+## 分词对模型性能的影响
+
+分词不仅仅是数据预处理的技术细节，它深刻影响模型的性能和行为。
+
+### 序列长度与计算效率
+
+Transformer 的计算复杂度是 $O(n^2 d)$，其中 $n$ 是序列长度，$d$ 是隐藏维度。序列越长，计算成本越高。
+
+子词分词在序列长度和信息密度之间取得平衡。例如，同一个句子：
+- 字符级：可能 200 个 token
+- 子词级：可能 50 个 token
+- 单词级：可能 30 个 token
+
+虽然单词级序列最短，但词表巨大导致嵌入层和输出层的参数量显著增加。子词级是一个甜蜜点。
+
+### 泛化能力
+
+子词分词提高了模型的泛化能力。通过共享子词，模型可以：
+
+**理解未登录词**：即使没见过 "COVID-19"，如果见过 "SARS" 和 "H1N1"，可能学到疾病名称通常包含字母和数字的组合，有助于理解新的疾病名称。
+
+**迁移形态变化**：如果学会了 "play" 的语义，遇到 "playing"、"played"、"player" 时，可以部分地复用 "play" 的知识。
+
+**跨语言迁移**：在多语言模型中，不同语言的相似子词（如英语 "demo-" 和法语 "démo-"）可能共享表示，促进知识迁移。
+
+### 分词粒度对下游任务的影响
+
+不同的任务对分词粒度有不同的偏好：
+
+**细粒度（更小的子词）**适合：
+- 字符级别的任务：拼写纠错、音译、词形变化生成
+- 需要处理大量罕见词的任务：生物医学文本处理、代码生成
+
+**粗粒度（更大的子词）**适合：
+- 语义理解任务：文本分类、情感分析、问答
+- 需要高效推理的场景：实时对话系统
+
+一个有趣的现象是，对于某些任务，显式的单词边界信息很重要。WordPiece 的 `##` 标记和 SentencePiece 的 ▁ 符号提供了这个信息，有助于模型理解词的结构。
+
+## 现代 LLM 的分词选择
+
+让我们看看主流模型的选择：
+
+**GPT 系列**（GPT-2、GPT-3、GPT-4）：
+- 使用 BPE
+- 词表大小：GPT-2 50K，GPT-3 50K
+- 对字节而非字符进行分词，确保任何文本都能编码
+
+**BERT**：
+- 使用 WordPiece
+- 词表大小：30K（英语），110K（多语言）
+- 使用 `##` 前缀标记子词
+
+**LLaMA**：
+- 使用 SentencePiece（BPE 模式）
+- 词表大小：32K
+- 字节回退，处理所有 Unicode 字符
+
+**T5**：
+- 使用 SentencePiece（Unigram 模式）
+- 词表大小：32K
+- 统一的文本到文本框架
+
+**选择趋势**：现代 LLM 越来越倾向于使用 SentencePiece，因为它的语言无关性和端到端的设计简化了系统复杂性，同时保持了良好的性能。
+
+## 总结与展望
+
+分词技术从早期的单词切分，到 BPE 和 WordPiece 的子词分解，再到 SentencePiece 的端到端设计，体现了 NLP 领域对这个基础问题的深入理解。
+
+**核心权衡始终存在**：词表大小、序列长度、泛化能力、计算效率——我们无法同时最大化所有目标，只能根据具体场景找到最佳平衡点。
+
+**子词分词的成功**在于它提供了一个优雅的中间道路：用有限的词表覆盖无限的语言可能性，同时保留了语义的可组合性。
+
+**未来的方向**可能包括：
+
+**无分词的模型**：直接在字节或字符级别工作，用更深的网络自动学习合适的粒度。最近的一些研究（如 ByT5）探索了这个方向，虽然计算成本更高，但避免了分词的复杂性。
+
+**动态分词**：根据上下文动态调整分词粒度。在简单的上下文中使用粗粒度分词（更高效），在复杂的上下文中使用细粒度分词（更灵活）。
+
+**多模态分词**：统一处理文本、图像、音频的分词方式，为多模态大模型提供一致的表示。
+
+无论技术如何演进，分词的核心挑战——如何有效地将连续的符号序列离散化——仍将是语言模型研究中的重要课题。理解分词的原理和权衡，对于设计和优化现代 NLP 系统至关重要。
+
+## 延伸阅读
+
+**经典论文**：
+- Sennrich et al. (2016). "Neural Machine Translation of Rare Words with Subword Units" - BPE 的原始论文
+- Schuster & Nakajima (2012). "Japanese and Korean Voice Search" - WordPiece 的最早应用
+- Kudo & Richardson (2018). "SentencePiece: A simple and language independent approach to subword tokenization" - SentencePiece 论文
+
+**工具和资源**：
+- Hugging Face Tokenizers 库：高性能的分词器实现，支持 BPE、WordPiece、Unigram
+- SentencePiece：Google 的官方实现，C++ 核心，Python 接口
+- tiktoken：OpenAI 的 BPE 实现，用于 GPT 系列模型
+
+**实践建议**：
+- 在新项目中，优先考虑 SentencePiece（特别是多语言场景）
+- 词表大小从 32K 开始，根据实际需求调整
+- 保留足够的特殊 token 用于未来扩展
+- 定期在测试集上检查分词效果，特别关注 OOV 和过度分割的情况
+
+分词是 NLP 管道的第一步，也是至关重要的一步。一个好的分词器可以显著提升模型的性能和效率，值得我们投入时间深入理解和精心设计。
