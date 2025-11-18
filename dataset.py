@@ -259,7 +259,11 @@ class MinimindDataset(Dataset):
             token_ids = token_ids + [0] * (self.max_length - len(token_ids))
         
         token_ids = torch.tensor(token_ids[:self.max_length], dtype=torch.long)
-        return token_ids[:-1], token_ids[1:]
+        
+        # 创建 loss_mask：padding token (0) 位置的 mask 为 0，其他位置为 1
+        loss_mask = (token_ids[1:] != 0).long()
+        
+        return token_ids[:-1], token_ids[1:], loss_mask
 
 if __name__ == "__main__":
     import argparse

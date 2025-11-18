@@ -112,7 +112,7 @@ class Trainer:
         
         self.dataloader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
                                      num_workers=args.num_workers, pin_memory=True)
-        self.criterion = nn.CrossEntropyLoss(ignore_index=0)
+        self.criterion = nn.CrossEntropyLoss(reduction='none')
 
     @property
     def base_model(self):
@@ -137,17 +137,26 @@ class Trainer:
             # 仅在主进程上使用 tqdm
             data_iterator = tqdm(self.dataloader, desc="训练") if self.rank == 0 else self.dataloader
             
-            for input_ids, labels in data_iterator:
+            for input_ids, labels, loss_mask in data_iterator:
                 # 每个进程将自己的数据加载到自己的 GPU 上
                 input_ids = input_ids.to(self.device)
                 labels = labels.to(self.device)
+                loss_mask = loss_mask.to(self.device)
                 
                 outputs = self.model(input_ids)
                 
+                # 使用 reduction='none' 计算每个位置的损失，然后通过 loss_mask 加权
                 loss = self.criterion(
                     outputs.logits.view(-1, self.base_model.config.vocab_size),
                     labels.view(-1)
-                )
+                ).view(labels.size())
+                
+                # 应用 loss_mask，忽略 padding 位置的损失
+                loss = (loss * loss_mask).sum() / loss_mask.sum()
+                
+                # 如果模型支持辅助损失（例如 MoE），添加辅助损失
+                if hasattr(outputs, 'aux_loss') and outputs.aux_loss is not None:
+                    loss = loss + outputs.aux_loss
                 
                 self.optimizer.zero_grad()
                 loss.backward()
