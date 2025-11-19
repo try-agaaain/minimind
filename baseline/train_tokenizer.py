@@ -20,7 +20,7 @@ def train_tokenizer():
                 data = json.loads(line)
                 yield data['text']
 
-    data_path = '../dataset/pretrain_hq.jsonl'
+    data_path = '../dataset/pretrain.jsonl'
 
     # 初始化tokenizer
     tokenizer = Tokenizer(models.BPE())
