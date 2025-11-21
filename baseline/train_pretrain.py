@@ -16,7 +16,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 # Import from current branch structure
 from minimind import MiniMindConfig, MiniMindForCausalLM
-from dataset import MinimindDataset, MiniMindTokenizerFast
+from dataset import MinimindDataset, MiniMindTokenizerFast, NovelDatasetPreparator
+from train_tokenizer import train_tokenizer as train_baseline_tokenizer
 
 warnings.filterwarnings('ignore')
 
@@ -158,6 +159,15 @@ if __name__ == "__main__":
     parser.add_argument('--from_weight', default='none', type=str, help="基于哪个权重训练，为none则从头开始")
     parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
     parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain", help="wandb项目名")
+    
+    # New parameters for tokenizer mode and dataset preparation
+    parser.add_argument("--tokenizer_mode", type=str, default="standard", choices=["baseline", "standard"], 
+                        help="Tokenizer方式：baseline=使用baseline的tokenizer方式，standard=使用标准方式（类似train.py）")
+    parser.add_argument("--dataset_dir", type=str, default="../dataset", help="数据集目录（用于自动准备数据集）")
+    parser.add_argument("--chunk_size", type=int, default=1024, help="文本分块大小")
+    parser.add_argument("--chunk_overlap", type=int, default=128, help="文本分块重叠大小")
+    parser.add_argument("--vocab_size", type=int, default=6400, help="词表大小")
+    
     args = parser.parse_args()
 
     # ========== 1. 初始化环境和随机种子 ==========
@@ -191,6 +201,71 @@ if __name__ == "__main__":
             wandb = None
     
     # ========== 5. 加载tokenizer和数据 ==========
+    # Check if tokenizer and dataset exist, prepare if necessary
+    if args.tokenizer_mode == "baseline":
+        # Baseline mode: use the baseline tokenizer training method
+        Logger(f"使用baseline tokenizer模式")
+        
+        # Only main process prepares files in distributed training
+        if is_main_process():
+            # Check if we need to prepare the dataset
+            if not os.path.exists(args.data_path):
+                Logger(f"⚠️  数据路径不存在: {args.data_path}")
+                Logger(f"开始使用NovelDatasetPreparator准备数据集...")
+                
+                # First, prepare the dataset using NovelDatasetPreparator
+                # This will create the pretrain.jsonl file with text and token_ids
+                preparator = NovelDatasetPreparator(
+                    dataset_dir=args.dataset_dir,
+                    pretrain_path=args.data_path,
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap,
+                    tokenizer_path=None  # Let preparator create its own tokenizer first
+                )
+                preparator.prepare_dataset()
+                Logger(f"✅ 数据集准备完成")
+            
+            # Now check if we need to train the baseline tokenizer
+            if not os.path.exists(args.tokenizer_path):
+                Logger(f"⚠️  Tokenizer路径不存在: {args.tokenizer_path}")
+                Logger(f"开始使用baseline方式训练tokenizer...")
+                
+                # Train tokenizer using baseline method
+                train_baseline_tokenizer(
+                    data_path=args.data_path,
+                    tokenizer_dir=args.tokenizer_path,
+                    vocab_size=args.vocab_size
+                )
+                Logger(f"✅ Tokenizer训练完成")
+        
+        # Wait for main process to finish preparation in distributed training
+        if dist.is_initialized():
+            dist.barrier()
+    else:
+        # Standard mode: automatically prepare tokenizer and dataset if they don't exist
+        Logger(f"使用standard tokenizer模式（类似train.py）")
+        
+        # Only main process prepares files in distributed training
+        if is_main_process():
+            if not os.path.exists(args.tokenizer_path) or not os.path.exists(args.data_path):
+                Logger(f"⚠️  Tokenizer或数据集不存在，开始自动准备...")
+                Logger(f"  - Tokenizer路径: {args.tokenizer_path} (存在: {os.path.exists(args.tokenizer_path)})")
+                Logger(f"  - 数据集路径: {args.data_path} (存在: {os.path.exists(args.data_path)})")
+                
+                preparator = NovelDatasetPreparator(
+                    dataset_dir=args.dataset_dir,
+                    pretrain_path=args.data_path,
+                    chunk_size=args.chunk_size,
+                    chunk_overlap=args.chunk_overlap,
+                    tokenizer_path=args.tokenizer_path if os.path.exists(args.tokenizer_path) else None
+                )
+                preparator.prepare_dataset()
+                Logger(f"✅ 数据集准备完成")
+        
+        # Wait for main process to finish preparation in distributed training
+        if dist.is_initialized():
+            dist.barrier()
+    
     Logger(f"Loading tokenizer from {args.tokenizer_path}")
     if not os.path.exists(args.tokenizer_path):
         raise ValueError(f"Tokenizer path does not exist: {args.tokenizer_path}")
