@@ -29,9 +29,11 @@ This will:
 
 ### Pretraining the Model
 
-#### Option 1: Standard Mode (Automatic Dataset Preparation - **New!**)
+Both **standard** and **baseline** modes now automatically prepare missing tokenizer and dataset files. The difference is in the tokenizer training approach:
 
-The new **standard mode** automatically checks for tokenizer and dataset files. If they don't exist, it will prepare them automatically using the `NovelDatasetPreparator` (similar to `train.py`).
+#### Option 1: Standard Mode (Uses NovelDatasetPreparator Tokenizer - Default)
+
+The **standard mode** uses the `NovelDatasetPreparator` approach (similar to `train.py`) for both dataset and tokenizer preparation.
 
 ```bash
 cd baseline
@@ -47,7 +49,7 @@ python train_pretrain.py \
 
 This will:
 1. Check if tokenizer and dataset exist
-2. If not, automatically prepare them from `.txt` files in `dataset_dir`
+2. If not, automatically prepare them using `NovelDatasetPreparator` (BPE tokenizer with standard special tokens)
 3. Load tokenizer and dataset
 4. Train the MiniMind model
 
@@ -58,14 +60,15 @@ This will:
 - `--chunk_overlap SIZE` - Overlap between chunks (default: `128`)
 - `--vocab_size SIZE` - Vocabulary size for tokenizer (default: `6400`)
 
-#### Option 2: Baseline Mode (Manual Preparation)
+#### Option 2: Baseline Mode (Uses Baseline Tokenizer Training)
 
-The **baseline mode** requires you to manually prepare tokenizer and dataset files before training (original behavior).
+The **baseline mode** uses the baseline tokenizer training approach from `train_tokenizer.py` (BPE with special tokens: `<|endoftext|>`, `<|im_start|>`, `<|im_end|>`).
 
 ```bash
 cd baseline
 python train_pretrain.py \
     --tokenizer_mode baseline \
+    --dataset_dir ../dataset \
     --data_path ../dataset/pretrain.jsonl \
     --tokenizer_path ../dataset/tokenizer \
     --epochs 1 \
@@ -74,11 +77,14 @@ python train_pretrain.py \
 ```
 
 This will:
-1. Check if tokenizer and dataset exist (raises error if missing)
-2. Load tokenizer and dataset
-3. Train the MiniMind model
+1. Check if dataset exists
+2. If not, automatically prepare dataset using `NovelDatasetPreparator`
+3. Check if tokenizer exists
+4. If not, automatically train tokenizer using baseline approach (`train_tokenizer.py` method)
+5. Load tokenizer and dataset
+6. Train the MiniMind model
 
-**Note:** In baseline mode, you must run `train_tokenizer.py` first to create the tokenizer.
+**Note:** Both modes now automatically prepare missing files. The key difference is the tokenizer training method used.
 
 ## Changes from Master Branch
 
@@ -87,8 +93,9 @@ The scripts have been adapted to work with the current branch structure:
 - Uses `MiniMindConfig` and `MiniMindForCausalLM` from `minimind.py` instead of master's `model.model_minimind`
 - Includes simplified helper functions instead of importing from master's `trainer.trainer_utils`
 - Data path changed from `pretrain_hq.jsonl` to `pretrain.jsonl` to match current branch conventions
-- **NEW:** Added automatic dataset preparation mode similar to `train.py`
+- **NEW:** Added automatic dataset preparation in both modes
 - **NEW:** Added `--tokenizer_mode` parameter to choose between baseline and standard tokenizer methods
+- **NEW:** Refactored `train_tokenizer.py` to be callable as a function from `train_pretrain.py`
 
 ## Requirements
 
