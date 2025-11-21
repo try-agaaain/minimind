@@ -26,6 +26,8 @@
 
 - `minimind.py`: MiniMind 模型定义文件 (从 master 分支的 model/model_minimind.py 复用)
 - `train.py`: 简洁的模型训练脚本
+- `evaluate.py`: 模型评估脚本，支持多种评估指标
+- `chat.py`: 对话脚本，用于与模型交互
 - `docs/`: 详细的技术文档
 
 ## 快速开始
@@ -62,7 +64,44 @@ python train.py \
 python train.py --pretrained_path /path/to/pretrained/model.pth
 ```
 
+### 5. 评估模型
+
+训练完成后，可以使用评估脚本评估模型性能：
+
+```bash
+python evaluate.py \
+    --model_path ./output/minimind_model.pt \
+    --tokenizer_path ./dataset/tokenizer \
+    --data_path ./dataset/pretrain.jsonl \
+    --batch_size 4 \
+    --show_samples 5
+```
+
+评估指标包括：
+- **困惑度 (Perplexity)**: 衡量模型预测的不确定性，越低越好
+- **Token准确率 (Accuracy)**: 模型预测正确的token比例
+- **平均损失 (Loss)**: 交叉熵损失的平均值
+
+还可以评估单个文本样本：
+
+```bash
+python evaluate.py \
+    --model_path ./output/minimind_model.pt \
+    --tokenizer_path ./dataset/tokenizer \
+    --text "这是一段测试文本"
+```
+
 ## 参数说明
+
+### 评估配置
+- `--model_path`: 模型权重路径 (默认: ./output/minimind_model.pt)
+- `--tokenizer_path`: 分词器路径 (默认: ./dataset/tokenizer)
+- `--data_path`: 评估数据集路径 (默认: ./dataset/pretrain.jsonl)
+- `--batch_size`: 批次大小 (默认: 4)
+- `--device`: 计算设备 (默认: cuda)
+- `--show_samples`: 显示生成样本数量 (默认: 5)
+- `--output_file`: 保存评估结果的JSON文件路径（可选）
+- `--text`: 评估单个文本（如果提供，将不使用数据集）
 
 ### 模型配置
 - `--hidden_size`: 隐藏层维度 (默认: 512)
