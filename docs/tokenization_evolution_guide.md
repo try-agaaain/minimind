@@ -1,672 +1,447 @@
-# LLM 分词技术完全指南：从原理到实践
+# 深入理解大语言模型的分词：从信息论到概率模型
 
-## 引言
+## 分词的本质：在压缩率与泛化性之间的权衡
 
-分词（Tokenization）是大语言模型（LLM）训练和推理的第一步，也是最关键的一步。选择合适的分词方法不仅影响模型的性能，还直接关系到训练效率和多语言支持能力。本文将系统性地介绍主流分词技术的演进历程、核心原理以及实际应用，帮助你深入理解并掌握 LLM 分词的完整知识体系。
+分词不只是技术细节，它是 LLM 的信息瓶颈。神经网络只能处理数字，我们必须将文本映射为 token 序列。这个映射面临根本性矛盾：
 
-## 一、子词分词算法的演进
+**字符级编码**简单但低效。一个 1000 词的文章变成 5000+ 字符，Transformer 的 O(n²) 复杂度让计算量暴涨 25 倍。更致命的是信息密度过低——模型必须从 'c','a','t' 三个独立符号学习"猫"的概念。
 
-### 1.1 BPE：基于频率的合并策略
+**词级编码**信息密度高但词汇表爆炸。英语常用词就数万个，词嵌入矩阵 `vocab_size × dim` 会膨胀到数亿参数。新词、罕见词、错别字全是 OOV（未登录词）。
 
-**BPE (Byte Pair Encoding)** 是最早被广泛应用的子词分词算法，其核心思想极其简单直接：
+分词算法的核心使命：**用 3-5 万的词汇表，通过子词组合表示任意文本**。这本质上是数据压缩问题——如何用固定大小的"码本"高效编码无限可能的"消息"。
 
-#### 算法原理
+## BPE：贪婪压缩的得与失
 
-BPE 采用**贪婪策略**，通过迭代合并最频繁出现的相邻字符对来构建词汇表：
+BPE (Byte Pair Encoding) 源自 1994 年的数据压缩算法，2016 年被引入 NLP。核心思想极简：**迭代合并最高频的相邻符号对**。
 
-$$
-\text{Score}(A, B) = \text{Freq}(AB)
-$$
+### 算法直觉
 
-**训练过程：**
-1. 初始化：将所有单词拆分为单字符
-2. 统计：计算所有相邻字符对的出现频率
-3. 合并：选择频率最高的字符对进行合并
-4. 迭代：重复步骤 2-3，直到达到目标词汇表大小
+初始状态：所有词拆分为字符。
+迭代过程：统计相邻符号对频率 → 合并最高频对 → 更新词汇表。
 
-**优势：**
-- 实现简单，计算高效
-- 能够有效处理未登录词（OOV）
+例如：`"aaabdaaabac"` → 合并 `aa`(4次) 得 `Z` → `"ZabdZabac"` → 合并 `ab`(2次) 得 `Y` → `"ZYdZYac"`。
 
-**局限性：**
-- 仅基于频率统计，可能合并语义价值低的高频随机组合
-- 不考虑子词之间的语义关联性
+高频词根（"ing", "tion"）自然浮现为独立 token。
 
-**典型应用：** GPT-2/3, RoBERTa
+### 数学本质：最小化编码长度
 
-### 1.2 WordPiece：基于似然度增益的优化
+BPE 隐式求解：
 
-**WordPiece** 是 BPE 的改进版本，由 Google 提出并应用于 BERT 等模型。它在选择合并对时引入了统计学和语言模型的考量。
+$$\min_{V, |V|=k} \mathbb{E}_{w \sim \text{corpus}}[|T(w)|]$$
 
-#### 算法原理
+即用 k 大小的词汇表 V 编码语料，最小化平均 token 数。这是 NP-hard 问题，BPE 用贪婪策略逼近：每次选择能最大减少总 token 数的合并。
 
-WordPiece 使用**似然度增益**作为合并标准：
+合并符号对 $(a, b)$ 后，token 总数减少 $f(a,b)$（从 2 个变 1 个）。BPE 选 $\arg\max f(a,b)$，是最优解的一阶近似。
 
-$$
-\text{Score}(A, B) = \frac{\text{Freq}(AB)}{\text{Freq}(A) \cdot \text{Freq}(B)}
-$$
+### 成功之处
 
-这个评分公式的核心思想是：
-- **分子** $\text{Freq}(AB)$：$A$ 和 $B$ 实际共现的频率
-- **分母** $\text{Freq}(A) \cdot \text{Freq}(B)$：假设 $A$ 和 $B$ 独立出现时的期望频率
+**1. 数据驱动，语言无关**：无需语言学知识，英语/中文/代码通用。高频模式自动捕获。
 
-#### 语义解释
+**2. 优雅处理 OOV**：任何文本可编码，最坏退化到字符级。新词 "unbelievableness" 分解为 `["un", "believ", "able", "ness"]`。
 
-- **高得分**：说明 $A$ 和 $B$ 的共现频率远高于独立期望，表明它们具有强烈的**绑定关系**（如 `un` 和 `happy`）
-- **低得分**：即使 $\text{Freq}(AB)$ 很高，但如果 $A$ 和 $B$ 独立出现频率更高，说明可能是随机共现，合并价值较小
+**3. 自适应粒度**：高频词粗粒度（整词），低频词细粒度（子词），符合 Zipf 定律。
 
-**核心优势：**
-- 考虑了子词的**统计相关性**，而非单纯的频率
-- 最大化整个训练语料在 Unigram 语言模型下的对数似然度
-- 生成的词汇表语义质量更高
+### 致命缺陷：局部最优的陷阱
 
-**前缀标记：**
-- 使用 `##` 标记词的内部子词（如 `play` → `##ing`）
+BPE 只看**当前**频率，忽略**未来**复用价值。
 
-**典型应用：** BERT, DistilBERT, MobileBERT
+反例：假设语料中
+- "un" + "related" 出现 1000 次
+- "unre" 在其他词（unreasonable, unreal）中各出现 500 次
 
-### 1.3 BPE vs WordPiece 对比总结
+BPE 优先合并 "unrelated"（频率 1000），但 "unre" 虽频率低（500），却能在多个词中复用。**全局看，"unre" 更有价值**。
 
-| 特性 | WordPiece | BPE |
-|------|-----------|-----|
-| **合并标准** | 基于似然度增益 | 基于频率 |
-| **评分公式** | $\frac{\text{Freq}(AB)}{\text{Freq}(A) \cdot \text{Freq}(B)}$ | $\text{Freq}(AB)$ |
-| **优化目标** | 最大化语料库对数似然度 | 贪婪合并最高频对 |
-| **语义质量** | 更倾向合并强关联子词 | 可能合并随机高频组合 |
-| **前缀标记** | `##` (内部子词标记) | `_` (词首标记) |
+结果：BPE 词汇表充斥"过拟合" token——训练集高频但泛化性差的偶然组合。
 
-## 二、SentencePiece 与 Unigram Language Model
+## WordPiece：从频率到关联性的跃迁
 
-### 2.1 为什么需要 SentencePiece？
+### 核心洞察：什么才是"好" token？
 
-传统的 BPE 和 WordPiece 都依赖于**预分词**（pre-tokenization），即在应用子词分割前，需要先用空格或标点符号将文本分割。这在处理以下场景时存在问题：
+WordPiece (Google 2012，BERT 采用) 只改了一个评分函数，却体现深刻统计学思想。
 
-- **无空格语言**：中文、日文、泰文等
-- **多语言统一处理**：不同语言需要不同的预分词规则
-- **可逆性**：预分词可能丢失信息
+**问题**：频率高 = 应该合并？
 
-**SentencePiece** 应运而生，提供了一种**语言无关、无需预分词**的统一解决方案。
+对比两种情况：
+- 情况 A：$(a, b)$ 出现 1000 次，但 $a$ 出现 10000 次，$b$ 出现 10000 次
+- 情况 B：$(c, d)$ 出现 80 次，但 $c$ 出现 100 次，$d$ 出现 100 次
 
-### 2.2 SentencePiece 的核心特性
+BPE 选 A（频率 1000 > 80）。但仔细想：A 中 $a,b$ 多数时候独立出现，共现可能是随机的；B 中 $c,d$ 几乎总一起出现，有强绑定关系。**语言学上，B 更应合并**。
 
-#### 1. 统一处理（Pre-tokenization-free）
-- 将所有输入文本视为**原始字符序列**或 Unicode 字符流
-- 空格被视为普通字符，通常用特殊符号 `_` 表示
-- 示例：`"hello world"` → `["▁hello", "▁world"]`
+**WordPiece 关注相对频率**：共现频率相对于独立期望有多高。
 
-#### 2. 语言无关性
-- 相同的训练和应用流程适用于任何语言
-- 对构建**多语言模型**（如 mBERT、T5、Llama）至关重要
+### 评分函数：点互信息的指数形式
 
-#### 3. 可逆性（Lossless）
-- 分词结果可以精确重构回原始文本
-- 不会丢失任何信息（包括空格位置）
+$$\text{Score}(a, b) = \frac{P(ab)}{P(a)P(b)} = \frac{f(ab) \cdot N}{f(a) \cdot f(b)}$$
 
-### 2.3 Unigram Language Model (ULM) 算法
+比值含义：
+- **> 1**：共现超出独立期望，正相关
+- **= 1**：符合独立假设，无特殊关系  
+- **< 1**：共现低于期望，负相关
 
-ULM 是 SentencePiece 最推荐的训练算法，它与 BPE/WordPiece 的最大区别在于**训练方向**和**概率切分能力**。
+这正是点互信息 (PMI) 的指数：$\text{PMI}(a,b) = \log \frac{P(ab)}{P(a)P(b)}$。
 
-#### 训练方向对比
+WordPiece 最大化符号对的统计关联性，而非绝对频率。
 
-- **BPE/WordPiece**：从单字符开始，**迭代合并**（从小到大）
-- **ULM**：从大词汇表开始，**迭代修剪**（从大到小）
+### 似然度视角：最大化语料概率
 
-#### ULM 训练过程
+在 Unigram 模型下，语料对数似然：$\log P = \sum_i \log P(t_i)$。
 
-**步骤 1：初始词汇表构建**
+合并 $(a,b)$ 为 $ab$ 后，似然变化：
 
-构建一个包含所有单字符和常见 N-gram 的大型初始词汇表 $V_{\text{initial}}$。
+$$\Delta \log P = k \cdot \log \frac{P(ab)}{P(a)P(b)}$$
 
-**步骤 2：计算子词概率**
+其中 $k = f(ab)$ 是合并次数。WordPiece **贪婪最大化似然增益**，每次合并都让语料在 Unigram 模型下更"可能"。
 
-使用 EM 算法为每个子词 $x$ 估计概率 $P(x)$，基于 Unigram 模型假设。
+### 数值例子：WordPiece 的智慧
 
-**步骤 3：迭代修剪（Pruning）**
+设语料总量 $N = 100000$：
+- "a" 10000 次，"b" 10000 次，"ab" 1000 次
+- "c" 100 次，"d" 100 次，"cd" 80 次
 
-这是 ULM 的核心步骤，迭代执行直到词汇表达到目标大小 $K$：
+**BPE**：Score(a,b) = 1000 > Score(c,d) = 80 → 选 (a,b)
 
-1. **计算损失**：对每个子词 $x$，计算移除它后整体语料库的对数似然度损失 $\text{Loss}(x)$
-2. **选择修剪对象**：找出损失最小的子词（即最冗余的）
-3. **修剪**：移除排名最低的 $\eta$ 比例（如 10%-20%）的子词
-4. **重新计算**：用新词汇表重新计算剩余子词的概率
+**WordPiece**：
+- Score(a,b) = $1000 \times 100000 / (10000 \times 10000) = 1.0$
+- Score(c,d) = $80 \times 100000 / (100 \times 100) = 800.0$ → 选 (c,d)
 
-通过修剪，ULM 保留那些**对编码贡献最大**的子词单元。
+**分析**：
+- (a,b) 独立期望共现 $10000 \times 10000 / 100000 = 1000$，实际恰好 1000，无关联。
+- (c,d) 独立期望仅 $100 \times 100 / 100000 = 0.1$，实际 80，是期望 800 倍！
 
-#### ULM 推理：概率切分
+WordPiece 识别出 (c,d) 的强绑定，BPE 被绝对频率误导。
 
-这是 ULM 最独特的特性。当给定一个词 $W$ 时，ULM 不使用简单的贪婪匹配，而是使用 **Viterbi 算法**找出概率最大的切分序列：
+### BERT 的选择：语义一致性
 
-$$
-S^* = \arg\max_{S} \prod_{i=1}^{k} P(s_i)
-$$
+WordPiece 生成的词汇表质量更高：
 
-**具体示例：**
+**1. 捕获语义单元**：前缀 "un-"、后缀 "-ing"/"-tion" 在不同词中反复出现，PMI 高，被识别为独立 token。模型更易学习语义（"un-" = 否定）。
 
-假设词汇表和概率如下：
+**2. 鲁棒性强**：对语料采样变化不敏感。BPE 可能因采样差异选择不同的高频对，WordPiece 关注关联性更稳定。
 
-| 子词 $x$ | 概率 $P(x)$ | $\log P(x)$ |
-|---------|------------|-------------|
-| `_play` | 0.20 | -1.61 |
-| `_ing` | 0.05 | -3.00 |
-| `_p` | 0.15 | -1.90 |
-| `_lay` | 0.10 | -2.30 |
-| `ing` | 0.08 | -2.53 |
+**3. 前缀标记**：用 `##` 标记词内子词（`play` + `##ing`），显式保留词边界信息，帮助模型理解词法结构。
 
-对于单词 `"_playing"`，可能的切分：
+## Unigram Language Model：从合并到修剪的范式转换
 
-**路径 A**：`[_play, ing]`
-- 总概率：$P = 0.20 \times 0.08 = 0.016$
-- 对数概率：$\log P = -1.61 + (-2.53) = -4.14$
+BPE/WordPiece 都是**自底向上**：从字符开始迭代合并。Unigram LM (Kudo 2018) 反其道而行：**自顶向下**，从大词汇表开始修剪。
 
-**路径 B**：`[_p, lay, ing]`
-- 总概率：$P = 0.15 \times 0.10 \times 0.08 = 0.0012$
-- 对数概率：$\log P = -1.90 + (-2.30) + (-2.53) = -6.73$
+### 训练流程：EM 算法 + 修剪
 
-**最优切分**：路径 A（概率更高）
+**步骤 1**：初始化大词汇表 $V_{\text{init}}$（所有字符 + 常见 N-gram）。
 
-#### ULM 的正则化采样
+**步骤 2**：EM 算法估计每个子词概率 $P(x)$。
+- E-step：给定当前 $P(x)$，计算每个词的最优切分
+- M-step：基于切分结果，更新 $P(x)$
 
-在训练时，ULM 可以启用**采样模式**，不总是选择最优切分，而是基于概率分布随机采样：
+**步骤 3**：修剪循环（至词汇表达目标大小 $K$）：
+1. 对每个子词 $x$，计算移除它后的似然损失 $\mathcal{L}(x)$
+2. 删除损失最小的 $\eta\%$（如 20%）
+3. 重新运行 EM 更新概率
 
-$$
-P(S | W) = \frac{P(S)}{\sum_{S'} P(S')}
-$$
+**核心思想**：保留对编码贡献大的子词，删除冗余的。
 
-**优势：**
-1. **数据增强**：为模型引入分词边界的轻微变化
-2. **鲁棒性**：使模型不过度依赖某一种固定切分方式
+### 推理：Viterbi 解码的概率切分
 
-### 2.4 ULM 的优势总结
+给定词 $W$，Unigram 不用贪婪匹配，而是找**概率最大**的切分：
 
-1. **概率切分**：基于统计模型而非贪婪匹配
-2. **更好拟合**：基于似然度最大化的优化
-3. **多语言统一**：结合 SentencePiece，是现代多语言 LLM 的基石
-4. **训练正则化**：采样切分提供数据增强效果
+$$S^* = \arg\max_{S} \prod_{i} P(s_i)$$
 
-**典型应用：** T5, XLNet, ALBERT, Llama
+实践中用 Viterbi 算法（动态规划）高效求解。
 
-## 三、实践指南：分词器的使用与训练
+**例子**：词汇表 `{_play: 0.2, _p: 0.15, _lay: 0.1, ing: 0.08}`，对 "_playing"：
+- 切分 1：`[_play, ing]`，概率 $0.2 \times 0.08 = 0.016$
+- 切分 2：`[_p, lay, ing]`，概率 $0.15 \times 0.1 \times 0.08 = 0.0012$
 
-### 3.1 两个核心库的分工
+Viterbi 选概率更高的切分 1。
 
-在 Hugging Face 生态系统中，`transformers` 和 `tokenizers` 两个库各司其职：
+### 独特优势：正则化与鲁棒性
 
-| 库名 | 定位 | 核心功能 |
-|------|------|---------|
-| **`tokenizers`** | 高性能分词引擎 | 训练、保存、加载分词器（Rust 后端） |
-| **`transformers`** | 模型生态集成 | 加载预训练分词器，集成到模型管线 |
+**1. 概率采样**：训练时不总选最优切分，而是按概率分布采样。如对 "_playing"，有 1.6% 概率选切分 1，0.12% 概率选切分 2。
 
-### 3.2 使用场景一：加载预训练分词器（最常用）
+这是**数据增强**：同一词的不同切分方式让模型见到更多变化，提高对分词边界的鲁棒性。
 
-当你使用 BERT、GPT-2、Llama 等预训练模型时，使用 `transformers` 库：
+**2. 全局优化**：EM 算法考虑所有可能切分，而非贪婪选择。词汇表更"自洽"——每个子词的概率与其在最优切分中的使用频率一致。
 
+**3. 理论保证**：最大化似然度有明确目标函数，修剪过程是有原则的近似，而非启发式。
+
+## SentencePiece：语言无关的工程实现
+
+### 为什么需要 SentencePiece？
+
+BPE/WordPiece 依赖**预分词**（按空格/标点切分），这在英语等语言可行，但在**无空格语言**（中文、日文、泰文）失效。不同语言需要不同的预分词规则，导致：
+
+1. **复杂性**：多语言模型需要维护多套规则
+2. **信息丢失**：预分词可能引入错误，且不可逆
+3. **不一致性**：训练和推理可能用不同预分词器
+
+### SentencePiece 的解决方案
+
+**核心**：将文本视为**原始字符流**，包括空格。空格用特殊符号 `▁` 表示。
+
+例：`"Hello world"` → `["▁Hello", "▁world"]`
+
+这实现了：
+- **语言无关**：相同流程处理任何语言
+- **可逆性**：token 序列可精确还原原文（包括空格位置）
+- **统一性**：训练/推理行为一致
+
+SentencePiece 支持 BPE/Unigram 两种算法，但**推荐 Unigram**（T5、XLNet、ALBERT、Llama 都用它）。
+
+## 实战：训练自定义分词器
+
+### 明确需求：特殊 Token 的设计
+
+不同任务需要不同的特殊 token：
+
+**因果语言模型** (GPT 风格)：
 ```python
-from transformers import AutoTokenizer
+special_tokens = ["<unk>", "<pad>", "<s>", "</s>"]
+```
+- `<s>`/`</s>`：序列边界，防止跨文档信息泄漏
+- `<unk>`：未知词，`<pad>`：填充
 
-# 加载预训练分词器
-tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+**掩码语言模型** (BERT 风格)：
+```python
+special_tokens = ["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]"]
+```
+- `[MASK]`：掩码位置
+- `[CLS]`：分类 token，`[SEP]`：分隔符
 
-# 编码文本
-text = "The quick brown fox jumps over the lazy dog."
-encoding = tokenizer(text)
-
-print("Tokens:", tokenizer.convert_ids_to_tokens(encoding['input_ids']))
-print("IDs:", encoding['input_ids'])
-
-# 批量编码（自动填充和截断）
-texts = ["This is a short sentence.", 
-         "This is a much longer sentence that needs to be handled."]
-batch_encoding = tokenizer(
-    texts, 
-    padding=True,          # 填充到最长序列
-    truncation=True,       # 截断超长序列
-    return_tensors="pt"    # 返回 PyTorch Tensor
-)
-
-# 解码（Token IDs → 文本）
-decoded_text = tokenizer.decode(batch_encoding['input_ids'][0])
-print("Decoded:", decoded_text)
+**对话模型** (ChatGPT 风格)：
+```python
+special_tokens = [
+    "<unk>", "<pad>",
+    "<|im_start|>", "<|im_end|>",  # 消息边界
+    "<|system|>", "<|user|>", "<|assistant|>"  # 角色标识
+]
 ```
 
-**优势：**
-- 自动识别并加载正确的分词算法
-- 自动处理特殊 Token（`[CLS]`, `[SEP]`, `[PAD]`）
-- 支持批处理和多种 Tensor 格式
+**关键原则**：
+1. 在分词器训练时添加为 Special Tokens（确保不可分割）
+2. 与基础模型规范一致（如使用 Llama 预训练模型，必须用其官方 token）
+3. 保证唯一性（用 `<|...|>` 等特殊符号封装）
 
-### 3.3 使用场景二：训练自定义分词器
-
-当你需要为特定领域（如医学、法律、小说）训练新分词器时，使用 `tokenizers` 库：
+### 代码示例：训练 Unigram 分词器
 
 ```python
 from tokenizers import Tokenizer
-from tokenizers.models import BPE, WordPiece, Unigram
-from tokenizers.trainers import BpeTrainer, WordPieceTrainer, UnigramTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.models import Unigram
+from tokenizers.trainers import UnigramTrainer
+from tokenizers.pre_tokenizers import Metaspace  # 处理空格
 
-# 1. 初始化分词器（选择算法）
-tokenizer = Tokenizer(WordPiece(unk_token="[UNK]"))
+# 1. 初始化（Unigram 模型）
+tokenizer = Tokenizer(Unigram())
 
-# 2. 设置 Pre-Tokenizer（如何预处理文本）
-tokenizer.pre_tokenizer = Whitespace()
+# 2. 设置预处理器（保留空格信息）
+tokenizer.pre_tokenizer = Metaspace(replacement="▁", add_prefix_space=True)
 
 # 3. 配置训练器
-trainer = WordPieceTrainer(
-    special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"],
-    vocab_size=32768,  # 常用大小：16k, 32k, 64k
-    continuing_subword_prefix="##"  # WordPiece 的子词前缀
+trainer = UnigramTrainer(
+    vocab_size=32000,  # 词汇表大小
+    special_tokens=["<unk>", "<s>", "</s>"],
+    unk_token="<unk>",
 )
 
-# 4. 训练分词器
-files = ["./corpus_1.txt", "./corpus_2.txt"]
+# 4. 训练（可用语料抽样，无需全部数据）
+files = ["sample_corpus_1.txt", "sample_corpus_2.txt"]
 tokenizer.train(files, trainer=trainer)
 
-# 5. 保存分词器
-tokenizer.save("my_custom_tokenizer.json")
+# 5. 保存
+tokenizer.save("unigram_tokenizer.json")
 ```
 
-**优势：**
-- 完全控制分词流程（Normalizer → Pre-Tokenizer → Model → Post-Processor）
-- 高性能 Rust 后端
-- 训练好的分词器可集成回 `transformers`
+**要点**：
+- **vocab_size**：通常 16k-64k。太小导致序列长，太大导致参数膨胀。
+- **抽样训练**：分词器训练只需捕获词汇分布，数百 MB 代表性数据即可，无需全量语料。
+- **Metaspace**：SentencePiece 风格的空格处理，确保可逆性。
 
-### 3.4 库选择建议
-
-| 场景 | 推荐库 | 典型操作 |
-|------|--------|---------|
-| **使用预训练模型** | `transformers` | `AutoTokenizer.from_pretrained()` |
-| **训练新分词器** | `tokenizers` | `Tokenizer.train()` |
-| **极速编码/解码** | `tokenizers` | 直接调用 Rust 后端 |
-| **自定义分词规则** | `tokenizers` | 定制 Pre-Tokenizer/Normalizer |
-
-**推荐工作流：**
-1. **应用阶段**：用 `transformers` 加载和使用分词器
-2. **定制阶段**：用 `tokenizers` 训练新分词器，然后导入 `transformers`
-
-## 四、构建预训练数据集
-
-### 4.1 数据准备两阶段
-
-#### 阶段一：分词器训练数据
-
-**目标**：训练高质量的分词器
-
-**格式要求**：原始文本文件（TXT）
-
-**数据量**：数百万至数十亿字符的代表性子集（无需全部数据）
-
-**操作建议**：
-- 从所有 TXT 文件中随机抽样
-- 合并为一个或几个大文件
-- 确保覆盖数据的词汇分布
-
-#### 阶段二：预训练数据构建
-
-**目标**：构建 Token ID 序列用于模型训练
-
-**格式要求**：固定长度的 Token ID 块
-
-**操作步骤**：
-1. 使用训练好的分词器对所有原始数据分词
-2. 将所有 Token ID 连接成连续序列
-3. 切分成固定长度的块（如 512, 1024, 2048）
-
-### 4.2 实际操作代码
+### 集成到 Transformers
 
 ```python
 from transformers import PreTrainedTokenizerFast
+
+# 加载自定义分词器
+tokenizer = PreTrainedTokenizerFast(
+    tokenizer_file="unigram_tokenizer.json",
+    unk_token="<unk>",
+    bos_token="<s>",
+    eos_token="</s>",
+)
+
+# 现在可以像使用预训练分词器一样使用
+text = "大语言模型的分词技术"
+tokens = tokenizer.tokenize(text)
+ids = tokenizer.encode(text)
+```
+
+## 数据集构建：统一格式的智慧
+
+### 核心理念：一种数据，多种用途
+
+**问题**：因果语言模型 (CLM) 和掩码语言模型 (MLM) 的训练格式看似不同，是否需要两套数据？
+
+**答案**：只需一种格式——**分块的 Token ID 序列**。训练时用 `DataCollator` 动态转换。
+
+### 数据准备流程
+
+```python
 from datasets import load_dataset
 from itertools import chain
-import glob
-import os
 
-# 1. 加载自定义分词器
-custom_tokenizer = PreTrainedTokenizerFast(
-    tokenizer_file="my_custom_tokenizer.json"
-)
+# 1. 加载原始文本
+raw_datasets = load_dataset("text", data_files={"train": "corpus/*.txt"})
 
-# 2. 加载原始数据
-raw_datasets = load_dataset(
-    "text", 
-    data_files={"train": glob.glob("./novels/*.txt")}
-)
+# 2. 分词
+def tokenize(examples):
+    return tokenizer(examples["text"])
 
-# 3. 分词函数
-def tokenize_function(examples):
-    return custom_tokenizer(examples["text"])
+tokenized = raw_datasets.map(tokenize, batched=True, remove_columns=["text"])
 
-# 4. 批量分词
-tokenized_datasets = raw_datasets.map(
-    tokenize_function,
-    batched=True,
-    num_proc=os.cpu_count(),
-    remove_columns=["text"],
-)
-
-# 5. 分块（Chunking）- 核心步骤
-block_size = 1024
+# 3. 分块（关键步骤）
+block_size = 2048  # 序列长度
 
 def group_texts(examples):
-    # 连接所有文本
-    concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    # 连接所有 token
+    concatenated = {k: list(chain(*examples[k])) for k in examples.keys()}
+    total_length = len(concatenated[list(examples.keys())[0]])
     
-    # 截断到 block_size 的倍数
+    # 截断到 block_size 倍数
     total_length = (total_length // block_size) * block_size
     
     # 切分成等长块
     result = {
-        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-        for k, t in concatenated_examples.items()
+        k: [t[i:i+block_size] for i in range(0, total_length, block_size)]
+        for k, t in concatenated.items()
     }
-    result["labels"] = result["input_ids"].copy()
     return result
 
-lm_datasets = tokenized_datasets.map(
-    group_texts,
-    batched=True,
-    num_proc=os.cpu_count(),
-)
-
-# 6. 保存数据集
-lm_datasets["train"].save_to_disk("./preprocessed_dataset")
+lm_datasets = tokenized.map(group_texts, batched=True)
 ```
 
-### 4.3 因果语言模型 (CLM) vs 掩码语言模型 (MLM)
+**关键**：连续文本被切分成固定长度的块（如 2048），每个块是一个训练样本。
 
-虽然两种模型的底层数据格式相同（分块的 Token IDs），但训练时的数据处理方式不同：
+### 动态转换：DataCollator 的魔法
 
-#### 因果语言模型（如 GPT, Llama）
-
-**训练目标**：预测下一个词元 $t_{i+1}$，给定前面所有词元 $(t_1, \ldots, t_i)$
-
-**数据格式**：
-- **输入 (input_ids)**：$[t_1, t_2, t_3, \ldots, t_L]$
-- **标签 (labels)**：$[t_2, t_3, t_4, \ldots, t_L, -100]$（左移一位）
-
-**关键点**：
-- 标签是输入的错位版本
-- 使用 `DataCollatorForLanguageModeling(mlm=False)` **自动生成**
-
-#### 掩码语言模型（如 BERT, RoBERTa）
-
-**训练目标**：预测被掩盖的词元 $\hat{t}_i$，给定其他所有词元
-
-**数据格式**：
-- **输入 (input_ids)**：$[t_1, t_2, \text{[MASK]}, \ldots, t_L]$
-- **标签 (labels)**：$[-100, -100, t_{\text{original}}, \ldots, -100]$
-
-**关键点**：
-- 只有被掩盖位置有标签
-- 使用 `DataCollatorForLanguageModeling(mlm=True, mlm_probability=0.15)` **动态掩码**
-
-### 4.4 统一数据格式 + 动态处理（推荐方案）
-
-**核心思想**：只准备一种通用格式（分块的 Token IDs），在训练时根据模型类型动态转换。
-
-**操作流程**：
-
-1. **数据准备**：构建统一的分块数据集（仅包含 `input_ids` 和 `attention_mask`）
-
-2. **CLM 训练配置**：
+**CLM 训练**（GPT 风格）：
 ```python
 from transformers import DataCollatorForLanguageModeling
 
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
-    mlm=False  # 因果语言模型
+    mlm=False  # 不做掩码
 )
 ```
 
-3. **MLM 训练配置**：
+DataCollator 自动生成 `labels`：将 `input_ids` 左移一位。
+- Input: `[t1, t2, t3, ..., tn]`
+- Labels: `[t2, t3, t4, ..., tn, -100]`
+
+模型学习预测下一个 token。
+
+**MLM 训练**（BERT 风格）：
 ```python
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
-    mlm=True,  # 掩码语言模型
-    mlm_probability=0.15  # 掩码概率
+    mlm=True,
+    mlm_probability=0.15  # 15% token 被掩码
 )
 ```
 
+DataCollator 动态掩码：随机选 15% 位置替换为 `[MASK]`，生成对应 labels。
+- Input: `[t1, [MASK], t3, t4, [MASK]]`
+- Labels: `[-100, t2, -100, -100, t5]`（只有掩码位置有标签）
+
+模型学习预测被掩盖的 token。
+
 **优势**：
-- 数据预处理只需执行一次
-- 灵活切换训练任务
-- 符合主流 LLM 训练实践
+- 数据预处理一次，训练时灵活切换任务
+- 动态掩码让每个 epoch 看到不同的掩码模式（正则化效果）
+- 符合主流实践（Hugging Face 官方推荐）
 
-## 五、特殊 Token 的设计与应用
+## 深入理解：控制 Token 与指令微调
 
-### 5.1 常见特殊 Token 分类
+### 控制 Token 的作用
 
-| Token 类型 | 示例 | 作用 | 必需性 |
-|-----------|------|------|--------|
-| **未登录词** | `[UNK]` | 替换词汇表外的词 | 必须 |
-| **填充** | `[PAD]` | 批处理时对齐序列长度 | 必须 |
-| **分类/起始** | `[CLS]`, `<s>` | 标记序列开始 | 视架构 |
-| **分隔** | `[SEP]`, `</s>` | 分隔文本段或标记结束 | 视架构 |
-| **掩码** | `[MASK]` | MLM 任务专用 | 仅 MLM |
+现代 LLM 不只预测下一个词，还要理解任务结构。**控制 token** 帮助模型区分不同角色和边界：
 
-### 5.2 现代 LLM 的控制 Token
+| Token | 用途 | 例子 |
+|-------|------|------|
+| `<|endoftext|>` | 文档边界 | 防止模型从上一篇文章的结尾预测下一篇文章的开头 |
+| `<|im_start|>`, `<|im_end|>` | 消息边界 | 标记每轮对话的起止 |
+| `<|system|>`, `<|user|>`, `<|assistant|>` | 角色标识 | 区分系统指令、用户输入、模型回复 |
 
-现代大模型（如 GPT-3, Llama, Qwen）引入了更多**控制 Token**用于结构化输入：
-
-| Token | 用途 | 典型场景 |
-|-------|------|---------|
-| `<|endoftext|>` | 文档边界标记 | 防止跨文档信息泄漏 |
-| `<|im_start|>`, `<|im_end|>` | 消息边界 | 多轮对话、指令微调 |
-| `<|system|>`, `<|user|>`, `<|assistant|>` | 角色标识 | 对话系统 |
-
-### 5.3 对话模板示例
-
+**示例**：
 ```
 <|im_start|>system
-你是一个乐于助人的 AI 助手。<|im_end|>
+你是一个专业的 AI 助手。<|im_end|>
 <|im_start|>user
-请解释黑洞的形成原理。<|im_end|>
+解释量子纠缠。<|im_end|>
 <|im_start|>assistant
-黑洞是由大质量恒星坍缩形成的...<|im_end|>
+量子纠缠是指两个粒子的状态相互关联...<|im_end|>
 ```
 
-**作用**：
-- 明确区分系统指令、用户输入和模型回复
-- 使模型学习对话结构
-- 提高指令跟随能力
+### 指令微调：从续写器到助手的质变
 
-### 5.4 设置特殊 Token 的建议
+**预训练**：模型学习语言的统计规律（"the cat sat on the ___" → "mat"）。
 
-**针对因果语言模型（如 GPT 风格）：**
-```python
-special_tokens = ["[UNK]", "[PAD]", "<s>", "</s>", "<|endoftext|>"]
-```
+**指令微调**：在 (指令, 回复) 对上训练，让模型学会：
+1. **理解指令意图**（翻译、摘要、问答）
+2. **遵循格式约束**（"用三句话回答"、"以列表形式"）
+3. **生成针对性回复**（而非续写）
 
-**针对掩码语言模型（如 BERT 风格）：**
-```python
-special_tokens = ["[UNK]", "[PAD]", "[CLS]", "[SEP]", "[MASK]"]
-```
+**数据要求**：
+- **任务多样性**：覆盖问答、翻译、代码、推理等多种任务
+- **风格多样性**：简洁/详细、正式/口语等不同表达
+- **高质量回复**：准确、安全、有用（错误数据会被模型学习）
 
-**针对对话模型（如 ChatGPT 风格）：**
-```python
-special_tokens = [
-    "[UNK]", "[PAD]", 
-    "<|im_start|>", "<|im_end|>",
-    "<|system|>", "<|user|>", "<|assistant|>"
-]
-```
-
-**关键原则**：
-1. 在分词器训练时添加特殊 Token
-2. 确保它们被视为不可分割的单元
-3. 与基础模型规范保持一致
-
-## 六、指令微调（Instruction Tuning）
-
-### 6.1 LLM 训练的三阶段
-
-| 阶段 | 名称 | 目的 | 数据类型 |
-|------|------|------|---------|
-| **阶段 1** | 预训练 | 学习语言的语法、语义和世界知识 | 原始文本 |
-| **阶段 2** | 指令微调 | 转化为遵循指令的助手 | (指令, 回复) 对 |
-| **阶段 3** | RLHF/DPO | 对齐人类偏好 | 偏好数据 |
-
-### 6.2 指令微调的核心作用
-
-#### 1. 提升指令跟随能力
-
-**问题**：预训练模型只会"续写"，不会"回答"
-
-**解决**：通过 (指令, 期望回复) 对训练，模型学会：
-- 识别指令意图
-- 遵循格式限制
-- 生成针对性的回答而非续写
-
-#### 2. 提升泛化能力
-
-**作用**：显著提高零样本/少样本学习能力
-
-**原理**：从大量不同任务中学习共性结构
-
-#### 3. 结构化对齐
-
-**作用**：使模型理解对话模板和角色标记
-
-**示例**：学会何时处理请求（`user`）、何时生成回复（`assistant`）
-
-### 6.3 指令微调数据集要求
-
-#### 格式要求
-
-每个样本必须是**结构化的交互历史**：
-
-```
-<|im_start|>user
-请将以下句子翻译成英文：这是一本好书。<|im_end|>
-<|im_start|>assistant
-This is a good book.<|im_end|>
-```
-
-#### 内容要求（多样性是关键）
-
-1. **任务多样性**：
-   - 问答、摘要、翻译、代码生成、推理等
-   - 目标：学习任务的一般性模式
-
-2. **风格多样性**：
-   - 简洁、详细、正式、非正式等不同表达
-   - 目标：提高对不同沟通风格的理解
-
-3. **角色多样性**：
-   - 单轮、多轮、带系统指令等
-   - 目标：处理复杂对话历史
-
-4. **质量要求**：
-   - 回复必须准确、安全、有用
-   - 避免错误信息和有害内容
-
-#### 数据集格式示例
-
-**JSON 格式（Alpaca 风格）：**
-```json
-{
-  "instruction": "将下列句子翻译成英文",
-  "input": "这是一本好书。",
-  "output": "This is a good book."
-}
-```
-
-**对话格式（ShareGPT 风格）：**
+**数据格式**：
 ```json
 {
   "conversations": [
-    {"from": "system", "value": "你是一个翻译助手。"},
-    {"from": "user", "value": "翻译：这是一本好书。"},
+    {"from": "system", "value": "你是翻译助手"},
+    {"from": "user", "value": "翻译：这是一本好书"},
     {"from": "assistant", "value": "This is a good book."}
   ]
 }
 ```
 
-### 6.4 指令标签定义原则
+**关键**：指令标签必须与分词器的 special tokens 一致，且在训练时正确应用（用控制 token 封装每段对话）。
 
-**约定优先于自由**：
+## 总结：选择与权衡
 
-1. **遵循基础模型规范**：
-   - 使用开源模型的官方标签（如 Llama 的 `<|start_header_id|>`）
-   - 确保与基础模型训练时的格式一致
-
-2. **保证唯一性**：
-   - 标签必须是词汇表中唯一的 Token
-   - 使用特殊符号封装（如 `<|...|>`）
-
-3. **Tokenization 兼容性**：
-   - 在分词器训练时添加为 Special Tokens
-   - 确保被视为不可分割的单元
-
-## 七、最佳实践与总结
-
-### 7.1 分词器选择决策树
+### 分词器选择决策
 
 ```
-是否有现成的预训练模型可用？
-├── 是 → 使用 transformers.AutoTokenizer
-└── 否 → 是否需要多语言/无空格语言支持？
-    ├── 是 → 使用 SentencePiece (ULM)
-    └── 否 → 领域特定语料
-        ├── 英文为主 → WordPiece 或 BPE
-        └── 效率优先 → BPE
+需要多语言/无空格语言支持？
+├─ 是 → SentencePiece + Unigram
+└─ 否 → 已有预训练模型可用？
+    ├─ 是 → 使用其分词器（transformers.AutoTokenizer）
+    └─ 否 → 领域特定语料？
+        ├─ 追求语义质量 → WordPiece
+        └─ 追求简单高效 → BPE
 ```
 
-### 7.2 数据准备最佳实践
+### 核心要点回顾
 
-1. **分词器训练**：
-   - 使用代表性数据子集（数百 MB 至数 GB）
-   - 词汇表大小：16k-64k（平衡效率和细粒度）
-   - 添加必要的特殊 Token
+1. **BPE**：贪婪合并高频对，简单高效，但可能过拟合训练集。
+2. **WordPiece**：最大化似然增益，关注符号关联性，语义质量更高。
+3. **Unigram**：自顶向下修剪，EM 算法全局优化，支持概率采样正则化。
+4. **SentencePiece**：语言无关实现，处理原始字符流，推荐 Unigram 算法。
+5. **数据准备**：统一格式（分块 Token IDs）+ DataCollator 动态转换。
+6. **控制 Token**：必须在分词器训练时添加，保证与模型规范一致。
 
-2. **预训练数据**：
-   - 统一格式：分块的 Token ID 序列
-   - 使用 DataCollator 动态生成任务特定格式
-   - 确保序列长度一致（如 1024, 2048）
+### 实践建议
 
-3. **指令微调数据**：
-   - 确保任务、风格、角色的多样性
-   - 高质量回复（准确、安全、有用）
-   - 使用标准对话模板
+- **词汇表大小**：16k-32k 通用，长上下文模型可用 64k+。
+- **训练数据**：分词器只需数百 MB 代表性抽样，无需全量语料。
+- **评估指标**：关注平均 token 长度（compression ratio）和 OOV 率。
+- **迭代优化**：先用默认配置快速验证，再根据任务特点调整（如代码任务可能需要更大词汇表）。
 
-### 7.3 常见陷阱与解决方案
+**分词是 LLM 的第一步，也是最容易被忽视的一步。但正如本文所示，选对分词算法并深入理解其原理，能为模型性能和训练效率带来实质提升。**
 
-| 问题 | 原因 | 解决方案 |
-|------|------|---------|
-| 词汇表过大/过小 | 参数设置不当 | 16k-32k 是通用起点，根据数据调整 |
-| OOV 率高 | 训练数据与应用数据分布不一致 | 使用目标领域数据训练分词器 |
-| 多语言性能差 | 使用了依赖预分词的算法 | 改用 SentencePiece (ULM) |
-| 特殊 Token 被拆分 | 未在训练时添加 | 在 `special_tokens` 参数中明确添加 |
-| 指令跟随能力差 | 指令微调数据质量低 | 提高数据多样性和回复质量 |
+## 参考文献
 
-### 7.4 核心要点回顾
-
-1. **算法演进**：BPE（频率）→ WordPiece（似然度）→ ULM（概率+修剪）
-2. **库分工**：`tokenizers`（训练）+ `transformers`（应用）
-3. **数据统一**：一种格式 + DataCollator 动态处理
-4. **特殊 Token**：必须在训练时添加，确保唯一性和完整性
-5. **指令微调**：预训练后的关键步骤，多样性决定泛化能力
-
-## 八、参考资源
-
-### 核心论文
-
-- **BPE**: [Neural Machine Translation of Rare Words with Subword Units](https://arxiv.org/abs/1508.07909)
-- **WordPiece**: [Japanese and Korean Voice Search](https://research.google/pubs/pub37842/)
-- **SentencePiece**: [SentencePiece: A simple and language independent approach to subword tokenization](https://arxiv.org/abs/1808.06226)
-- **Unigram LM**: [Subword Regularization: Improving Neural Network Translation Models with Multiple Subword Candidates](https://arxiv.org/abs/1804.10959)
-
-### 工具文档
-
-- [Hugging Face Tokenizers](https://huggingface.co/docs/tokenizers/)
-- [Hugging Face Transformers](https://huggingface.co/docs/transformers/)
-- [SentencePiece GitHub](https://github.com/google/sentencepiece)
-
-### 推荐阅读
-
-- [The Illustrated Word2vec](https://jalammar.github.io/illustrated-word2vec/)
-- [Byte Pair Encoding is Suboptimal for Language Model Pretraining](https://arxiv.org/abs/2004.03720)
-- [FLAN: Finetuned Language Models Are Zero-Shot Learners](https://arxiv.org/abs/2109.01652)
-
----
-
-**本文档持续更新中。如有疑问或建议，欢迎提交 Issue 或 PR。**
+- Sennrich et al. (2016). "Neural Machine Translation of Rare Words with Subword Units" - BPE 原始论文
+- Schuster & Nakajima (2012). "Japanese and Korean Voice Search" - WordPiece 首次提出
+- Kudo (2018). "Subword Regularization: Improving Neural Network Translation Models" - Unigram LM
+- Kudo & Richardson (2018). "SentencePiece: A simple and language independent approach" - SentencePiece 实现
+- Hugging Face Tokenizers 文档：https://huggingface.co/docs/tokenizers/
