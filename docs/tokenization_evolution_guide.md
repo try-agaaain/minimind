@@ -29,7 +29,7 @@ BPE 隐式求解：
 
 $$\min_{V, |V|=k} \mathbb{E}_{w \sim \text{corpus}}[|T(w)|]$$
 
-即用 k 大小的词汇表 V 编码语料，最小化平均 token 数。这是 NP-hard 问题，BPE 用贪婪策略逼近：每次选择能最大减少总 token 数的合并。
+其中 $V$ 是词汇表，$k$ 是词汇表大小，$T(w)$ 是词 $w$ 被编码后的 token 序列，$|T(w)|$ 是 token 数量。即用 k 大小的词汇表编码语料，最小化平均 token 数。这是 NP-hard 问题，BPE 用贪婪策略逼近：每次选择能最大减少总 token 数的合并。
 
 合并符号对 $(a, b)$ 后，token 总数减少 $f(a,b)$（从 2 个变 1 个）。BPE 选 $\arg\max f(a,b)$，是最优解的一阶近似。
 
@@ -101,12 +101,12 @@ $$\Delta \log P = k \cdot \log \frac{P(ab)}{P(a)P(b)}$$
 **BPE**：Score(a,b) = 1000 > Score(c,d) = 80 → 选 (a,b)
 
 **WordPiece**：
-- Score(a,b) = $1000 \times 100000 / (10000 \times 10000) = 1.0$
-- Score(c,d) = $80 \times 100000 / (100 \times 100) = 800.0$ → 选 (c,d)
+- Score(a,b) = $\frac{1000 \times 100000}{10000 \times 10000} = 1.0$
+- Score(c,d) = $\frac{80 \times 100000}{100 \times 100} = 800.0$ → 选 (c,d)
 
 **分析**：
-- (a,b) 独立期望共现 $10000 \times 10000 / 100000 = 1000$，实际恰好 1000，无关联。
-- (c,d) 独立期望仅 $100 \times 100 / 100000 = 0.1$，实际 80，是期望 800 倍！
+- (a,b) 独立期望共现 $\frac{10000 \times 10000}{100000} = 1000$，实际恰好 1000，无关联。
+- (c,d) 独立期望仅 $\frac{100 \times 100}{100000} = 0.1$，实际 80，是期望 800 倍！
 
 WordPiece 识别出 (c,d) 的强绑定，BPE 被绝对频率误导。
 
@@ -440,8 +440,8 @@ DataCollator 动态掩码：随机选 15% 位置替换为 `[MASK]`，生成对�
 
 ## 参考文献
 
-- Sennrich et al. (2016). "Neural Machine Translation of Rare Words with Subword Units" - BPE 原始论文
-- Schuster & Nakajima (2012). "Japanese and Korean Voice Search" - WordPiece 首次提出
-- Kudo (2018). "Subword Regularization: Improving Neural Network Translation Models" - Unigram LM
-- Kudo & Richardson (2018). "SentencePiece: A simple and language independent approach" - SentencePiece 实现
+- Sennrich, R., Haddow, B., & Birch, A. (2016). "Neural Machine Translation of Rare Words with Subword Units". *ACL 2016*.
+- Schuster, M., & Nakajima, K. (2012). "Japanese and Korean Voice Search". *ICASSP 2012*.
+- Kudo, T. (2018). "Subword Regularization: Improving Neural Network Translation Models with Multiple Subword Candidates". *ACL 2018*.
+- Kudo, T., & Richardson, J. (2018). "SentencePiece: A simple and language independent approach to subword tokenization". *EMNLP 2018*.
 - Hugging Face Tokenizers 文档：https://huggingface.co/docs/tokenizers/
