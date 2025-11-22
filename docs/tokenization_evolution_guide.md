@@ -449,9 +449,9 @@ data_collator = DataCollatorForLanguageModeling(
 
 | Token | 用途 | 典型场景 |
 |-------|------|---------|
-| `<\|endoftext\|>` | 文档边界标记 | 防止跨文档信息泄漏 |
-| `<\|im_start\|>`, `<\|im_end\|>` | 消息边界 | 多轮对话、指令微调 |
-| `<\|system\|>`, `<\|user\|>`, `<\|assistant\|>` | 角色标识 | 对话系统 |
+| `<|endoftext|>` | 文档边界标记 | 防止跨文档信息泄漏 |
+| `<|im_start|>`, `<|im_end|>` | 消息边界 | 多轮对话、指令微调 |
+| `<|system|>`, `<|user|>`, `<|assistant|>` | 角色标识 | 对话系统 |
 
 ### 5.3 对话模板示例
 
