@@ -584,38 +584,10 @@ torch.save(self.base_model.state_dict(), path)
 ```
 
 如果保存了带前缀的版本，加载时必须也用 DDP 包装，否则参数名不匹配。这会导致模型无法用于推理（推理通常不使用 DDP）。
-       param.register_hook(gradient_sync_hook)
-   ```
-   在反向传播时，每个参数的梯度计算完成后，立即触发 AllReduce 同步。
 
-2. **桶（Bucket）机制**：
-   DDP 不会为每个参数单独同步，而是将多个参数的梯度打包成"桶"（默认 25MB），批量同步：
-   ```
-   Param 1 ─┐
-   Param 2 ─┼→ Bucket 1 → AllReduce
-   Param 3 ─┘
-   
-   Param 4 ─┐
-   Param 5 ─┼→ Bucket 2 → AllReduce
-   Param 6 ─┘
-   ```
-   这减少了通信次数，提高了带宽利用率。
+### 4. 数据分片：确保每个进程看到不同的世界
 
-3. **重叠计算与通信**：
-   DDP 采用流水线式的执行：当某个桶的梯度计算完成后，立即开始同步，无需等待所有梯度计算完成。这使得通信与计算可以重叠，进一步提升效率。
-
-**访问原始模型**：
-
-DDP 包装后，原始模型位于 `.module` 属性：
-```python
-@property
-def base_model(self):
-    return self.model.module  # 返回未包装的模型
-```
-
-在保存模型时，必须保存 `.module.state_dict()`，否则会多出 `module.` 前缀，导致加载失败。
-
-### 4. 数据分布：DistributedSampler
+有了模型副本，下一个问题是：如何确保每个进程处理不同的数据？这正是 `DistributedSampler` 的职责。
 
 数据并行的核心是让每个进程处理不同的数据子集：
 
@@ -801,53 +773,79 @@ dist.destroy_process_group()
 
 ---
 
-## 损失函数的演进与设计
+## 损失函数：训练的罗盘与指挥棒
 
-损失函数是模型训练的指挥棒，它的设计直接决定了模型学习的目标和效果。在语言模型的预训练中，损失函数经历了从简单到精细的演进过程。
+理解了 DDP 如何高效地组织并行训练，我们现在转向另一个关键问题：**模型究竟在学什么**？这个问题的答案，藏在损失函数的设计中。
 
-### 1. 因果语言模型的基础损失：交叉熵
+损失函数不仅仅是一个数学公式，它定义了"什么是好的预测"。在语言模型训练中，看似简单的交叉熵损失背后，隐藏着对语言本质的深刻理解。而 MiniMind 在此基础上的细微调整——如何处理 padding、如何归一化损失——每一个选择都影响着训练的稳定性和最终效果。
 
-语言模型的核心任务是**下一个 token 预测**（Next Token Prediction）：给定前文，预测下一个 token 的概率分布。
+### 1. 交叉熵：为什么它是语言模型的"天然"选择？
 
-**数学表述**：
+语言模型的核心任务是预测下一个 token。给定上文 "The cat sat on the"，模型需要输出一个概率分布：
 
-给定输入序列 $x_1, x_2, \ldots, x_T$，模型需要学习条件概率：
-$$P(x_t | x_1, \ldots, x_{t-1})$$
+```
+P("mat") = 0.35
+P("floor") = 0.25
+P("roof") = 0.15
+...
+```
 
-训练目标是最大化似然：
-$$\mathcal{L} = -\sum_{t=1}^{T} \log P(x_t | x_1, \ldots, x_{t-1})$$
+但为什么用交叉熵作为损失？为什么不是 MSE（均方误差）或其他度量？
 
-在实现中，这对应于交叉熵损失：
+**从信息论的视角理解交叉熵**
+
+交叉熵来源于信息论，它衡量的是：用模型的概率分布 $\hat{P}$ 来编码真实分布 $P$ 时的**平均编码长度**。
+
+在语言建模中，真实分布 $P$ 是确定性的 one-hot 向量（真实的下一个词是"mat"，概率为 1，其他词为 0）。因此交叉熵简化为：
+
+$$H(P, \hat{P}) = -\log \hat{P}(\text{true\_token})$$
+
+这个公式有一个优美的性质：**它随着预测置信度的增加而快速下降**。
+
+```
+如果模型预测 P("mat") = 0.9，损失 = -log(0.9) ≈ 0.105
+如果模型预测 P("mat") = 0.5，损失 = -log(0.5) ≈ 0.693
+如果模型预测 P("mat") = 0.1，损失 = -log(0.1) ≈ 2.303
+```
+
+注意损失的增长是**非线性的**。当模型预测错误时（概率接近 0），损失急剧上升。这种"惩罚不确定性"的特性，正是交叉熵适合分类任务的原因。
+
+**为什么不用 MSE？**
+
+有人可能会问：为什么不用均方误差（MSE）？让我们对比一下：
+
+```
+真实分布: [0, 0, 1, 0, 0]  (one-hot，真实词是第3个)
+模型预测: [0.1, 0.2, 0.4, 0.2, 0.1]
+
+交叉熵损失: -log(0.4) ≈ 0.916
+MSE 损失: (0.1² + 0.2² + (1-0.4)² + 0.2² + 0.1²) / 5 ≈ 0.130
+```
+
+MSE 的问题在于：它对所有位置的误差一视同仁。即使模型对错误的词给出了 0.2 的概率，MSE 也只是轻微惩罚。而交叉熵更关注**正确词的概率**——只要正确词的概率高，其他词的分布影响较小。
+
+更深层的原因是：MSE 假设误差符合高斯分布，这对概率分布建模并不适合。交叉熵直接来源于最大似然估计，与概率模型的本质更契合。
+
+**实现中的细节：为什么要reshape？**
+
+在 MiniMind 的代码中，你会看到这样的操作：
 
 ```python
-criterion = nn.CrossEntropyLoss()
-
-outputs = model(input_ids)  # [batch, seq, vocab_size]
-logits = outputs.logits
-
 loss = criterion(
-    logits.view(-1, vocab_size),  # [batch * seq, vocab_size]
-    labels.view(-1)               # [batch * seq]
+    outputs.logits.view(-1, vocab_size),  # [batch * seq, vocab_size]
+    labels.view(-1)                       # [batch * seq]
 )
 ```
 
-**为什么是交叉熵？**
+为什么要把 `[batch, seq, vocab_size]` 重塑为 `[batch * seq, vocab_size]`？
 
-交叉熵衡量的是模型预测分布 $\hat{P}$ 与真实分布 $P$ 之间的差异：
-$$H(P, \hat{P}) = -\sum_i P(i) \log \hat{P}(i)$$
+这是因为 PyTorch 的 `CrossEntropyLoss` 期望：
+- 输入：`[N, C]` 其中 N 是样本数，C 是类别数
+- 标签：`[N]`
 
-对于下一个 token 预测，真实分布是 one-hot 向量（只有正确 token 为 1），因此交叉熵简化为：
-$$H = -\log \hat{P}(\text{correct\_token})$$
+对于语言模型，每个时间步都是一个独立的预测任务。将 batch 和 sequence 维度展平，等于把"8 个样本，每个 1024 tokens"变成"8192 个独立的分类任务"。
 
-最小化交叉熵等价于最大化正确 token 的预测概率。
-
-**Softmax 的数值稳定性**：
-
-直接计算 softmax 可能导致数值溢出：
-$$\text{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}}$$
-
-当 $x_i$ 很大时，$e^{x_i}$ 会溢出。PyTorch 的 `CrossEntropyLoss` 内部使用 LogSumExp 技巧：
-$$\log \sum_j e^{x_j} = \max_j(x_j) + \log \sum_j e^{x_j - \max_j(x_j)}$$
+这种设计的好处是：统一了所有位置的损失计算，便于并行化。
 
 这种实现既稳定又高效。
 
