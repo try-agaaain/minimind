@@ -23,10 +23,11 @@ from my_dataset import MinimindDataset
 class Trainer:
     """MiniMind 分布式训练器 (DDP)"""
     
-    def __init__(self, args, rank, world_size, dataset: MinimindDataset):
+    def __init__(self, args, rank, world_size, dataset: MinimindDataset, tokenizer):
         self.args = args
         self.rank = rank
         self.world_size = world_size
+        self.tokenizer = tokenizer
 
         # 核心 DDP 逻辑：使用 local_rank 绑定到唯一的 GPU
         if args.local_rank == -1 or world_size == 0:
@@ -259,7 +260,7 @@ def main():
                               tokenizer=tokenizer,
                               max_seq_len=args.max_seq_len)
 
-    trainer = Trainer(args, rank, world_size, dataset)
+    trainer = Trainer(args, rank, world_size, dataset, tokenizer)
     trainer.train()
 
 if __name__ == "__main__":
