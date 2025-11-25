@@ -68,7 +68,7 @@ class MinimindDataset(Dataset):
         return input_ids, labels, loss_mask
     
     def get_token(self, idx):
-        return self.tokenizer.tokenize(self[idx])
+        return self.tokenizer.tokenize(self.data[idx]["text"])
         
     def text_to_dataset(self) -> List[dict]:
         """执行切块并将所有结果流式写入单个 JSONL 文件。"""
@@ -95,14 +95,15 @@ class MinimindDataset(Dataset):
                         total_chunks_count += 1
 
             except Exception as e:
-                print(f"警告：跳过文件 {path.name}，处理失败: {e}")
+                print(f"警告：跳过文件 {path}，处理失败: {e}")
                 continue
         # 写入 JSONL 格式: {"text": "..."}
         with open(self.dataset_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(all_records))
        
         print(f"\n--- 处理完成 ---\n总共生成 {total_chunks_count} 个切块，保存到 {self.dataset_path}")
-        return all_records
+        self.data = [json.loads(line) for line in all_records]
+        return self
 
 def train_tokenizer(
     vocab_size: int = 6400,
