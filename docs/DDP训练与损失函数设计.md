@@ -241,42 +241,43 @@ Ring-AllReduce 用一个巧妙的方法解决了这两个问题。
 
 **阶段 1：Reduce-Scatter（聚合并分发）**
 
-首先，将每个 GPU 的梯度向量分成 N 段（N 是 GPU 数量）。然后进行 N-1 轮传递：
+首先，将每个 GPU 的梯度向量分成 N 段（N 是 GPU 数量）。然后进行 N-1 轮传递。在每一轮中，每个 GPU 将自己"负责"的段发送给下一个 GPU，同时接收上一个 GPU 发来的段并累加：
 
 ```
-初始状态：
+初始状态（每个 GPU 有 4 段数据）：
 GPU0: [a0, b0, c0, d0]
 GPU1: [a1, b1, c1, d1]
 GPU2: [a2, b2, c2, d2]
 GPU3: [a3, b3, c3, d3]
 
-第 1 轮：每个 GPU 发送一个段到下一个 GPU，接收一个段并累加
-GPU0: [a0, b0+b3, c0, d0]  (接收了 b3)
-GPU1: [a1+a0, b1, c1, d1]  (接收了 a0)
-GPU2: [a2, b2+b1, c2, d2]  (接收了 b1)
-GPU3: [a3, b3, c3+c2, d3]  (接收了 c2)
+第 1 轮：
+  GPU0 发送 d0 给 GPU1，接收 GPU3 的 a3，累加到 a 段
+  GPU1 发送 a1 给 GPU2，接收 GPU0 的 d0，累加到 d 段
+  GPU2 发送 b2 给 GPU3，接收 GPU1 的 a1，累加到 a 段
+  GPU3 发送 c3 给 GPU0，接收 GPU2 的 b2，累加到 b 段
 
-第 2 轮：
-GPU0: [a0, b0+b3+b2, c0, d0+d3]
-GPU1: [a1+a0+a3, b1, c1, d1]
-GPU2: [a2, b2+b1+b0, c2, d2+d1]
-GPU3: [a3+a2, b3, c3+c2+c1, d3]
+结果：
+GPU0: [a0+a3, b0, c0+c3, d0]
+GPU1: [a1, b1, c1, d1+d0]
+GPU2: [a2+a1, b2, c2, d2]
+GPU3: [a3, b3+b2, c3, d3]
 
-第 3 轮：
-GPU0: [a0+a1+a2+a3, b0+b1+b2+b3, c0, d0]
-GPU1: [a0+a1+a2+a3, b0+b1+b2+b3, c1, d1]
-GPU2: [a2, b0+b1+b2+b3, c0+c1+c2+c3, d2]
-GPU3: [a3, b3, c0+c1+c2+c3, d0+d1+d2+d3]
+第 2 轮：继续发送和累加...
+第 3 轮：完成...
+
+最终 Reduce-Scatter 结果：
+GPU0: [a0+a1+a2+a3, -, -, -]  (只有第一段是完整的)
+GPU1: [-, b0+b1+b2+b3, -, -]  (只有第二段是完整的)
+GPU2: [-, -, c0+c1+c2+c3, -]  (只有第三段是完整的)
+GPU3: [-, -, -, d0+d1+d2+d3]  (只有第四段是完整的)
 ```
-
-注意，经过 N-1 轮后，每个 GPU 持有一个完整聚合的段。GPU0 有完整的 a_sum，GPU1 有完整的 b_sum，以此类推。
 
 **阶段 2：AllGather（全员收集）**
 
-再进行 N-1 轮传递，但这次不累加，只转发：
+现在每个 GPU 持有完整聚合结果的 1/N。再进行 N-1 轮传递，这次只转发（不累加），让每个 GPU 都收集到完整结果：
 
 ```
-再经过 3 轮后，每个 GPU 都有：
+经过 N-1 轮 AllGather 后，每个 GPU 都有：
 [a0+a1+a2+a3, b0+b1+b2+b3, c0+c1+c2+c3, d0+d1+d2+d3]
 ```
 
@@ -865,19 +866,28 @@ criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
 
 **方案 2：显式掩码（MiniMind 采用）**
 
-MiniMind 采用了更灵活的显式掩码方式：
+MiniMind 采用了更灵活的显式掩码方式。掩码在数据集中预先构造，并在训练时应用：
 
 ```python
-# 计算每个位置的损失
-loss = self.criterion(
-    outputs.logits.view(-1, vocab_size),
-    labels.view(-1)
-).view(labels.size())  # [batch, seq]
-
-# 应用掩码
-loss_mask = (labels != 0).float()  # padding token ID 为 0
-loss = (loss * loss_mask).sum() / loss_mask.sum()
+# 在 Trainer.train() 中
+for input_ids, labels, loss_mask in data_iterator:
+    input_ids = input_ids.to(self.device)
+    labels = labels.to(self.device)
+    loss_mask = loss_mask.to(self.device)
+    
+    outputs = self.model(input_ids)
+    
+    # 使用 reduction='none' 计算每个位置的损失
+    loss = self.criterion(
+        outputs.logits.view(-1, self.base_model.config.vocab_size),
+        labels.view(-1)
+    ).view(labels.size())  # [batch, seq]
+    
+    # 应用预构造的 loss_mask
+    loss = (loss * loss_mask).sum() / loss_mask.sum()
 ```
+
+注意这里使用的是 `CrossEntropyLoss(reduction='none')`，这样可以得到每个位置的损失值，再通过掩码进行加权平均。
 
 **为什么选择显式掩码？**
 
@@ -901,14 +911,14 @@ def __getitem__(self, idx):
     
     token_ids = torch.tensor(token_ids, dtype=torch.long)
     
-    # 构造输入和标签
-    # 输入：[0, t1, t2, ..., tn-1]  (0 是 BOS token)
+    # 构造输入和标签 (因果语言模型的标准做法)
+    # 输入：在开头插入一个起始标记，然后是原序列去掉最后一个 token
     pre_token_ids = torch.concat([torch.tensor([0]), token_ids[:-1]])
     
-    # 标签：[t1, t2, ..., tn, 0]
+    # 标签：原序列从第二个 token 开始，末尾补零
     post_token_ids = torch.concat([token_ids[1:], torch.tensor([0])])
     
-    # 掩码：非填充位置为 1
+    # 掩码：非零位置为 1（有效 token），零位置为 0（padding）
     loss_mask = (post_token_ids != 0).long()
     
     return pre_token_ids, post_token_ids, loss_mask
@@ -916,11 +926,11 @@ def __getitem__(self, idx):
 
 **关键设计**：
 
-1. **因果偏移**：输入和标签错位一个 token，实现 next token prediction
-2. **BOS token**：在序列开头插入 BOS token（ID 为 0），为第一个真实 token 提供上下文
-3. **掩码逻辑**：`post_token_ids != 0` 确保填充位置（包括末尾的 padding）不参与损失
+1. **因果偏移**：输入和标签错位一个 token，实现 next token prediction。模型根据 `pre_token_ids[i]` 预测 `post_token_ids[i]`
+2. **序列对齐**：在输入开头插入 0 作为起始标记，使得序列长度保持一致
+3. **掩码逻辑**：`post_token_ids != 0` 过滤掉 padding 位置，确保只在有效 token 上计算损失
 
-这种设计优雅地统一了序列的首尾处理，避免了边界条件的特殊判断。
+这种设计简洁地处理了序列的首尾对齐问题。
 
 ### 3. 损失归一化的重要性
 
@@ -1043,70 +1053,54 @@ $$\mathcal{L}_{\text{aux}} = \alpha \cdot N \sum_{i=1}^{N} P_i \cdot f_i$$
 
 ### MiniMind 中的辅助损失实现
 
-MiniMind 支持两种辅助损失计算模式：全局级和序列级。
+MiniMind 的辅助损失计算在 `MoEGate` 的 `forward` 方法中，支持两种模式：全局级和序列级。
 
-**全局级辅助损失**：
+**全局级辅助损失**（当 `seq_aux=False`）：
 
 ```python
-def _compute_aux_loss(self, scores, topk_idx, bsz, seq_len):
+# 在 MoEGate.forward 中
+if self.training and self.alpha > 0.0:
+    scores_for_aux = scores  # softmax 输出的专家概率分布
+    topk_idx_for_aux_loss = topk_idx.view(bsz, -1)  # [batch, seq*top_k]
+    
     if not self.seq_aux:
-        # scores: [batch*seq, n_experts]
-        # topk_idx: [batch, seq*top_k]
+        # 统计每个专家被选中的频率
+        mask_ce = F.one_hot(topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts)
+        ce = mask_ce.float().mean(0)  # [n_experts] 平均选中比例
         
-        # 计算实际使用比例
-        mask_ce = F.one_hot(topk_idx.view(-1), num_classes=self.n_routed_experts)
-        ce = mask_ce.float().mean(0)  # [n_experts]
+        # 计算门控网络的平均预测概率
+        Pi = scores_for_aux.mean(0)  # [n_experts]
         
-        # 计算预测概率
-        Pi = scores.mean(0)  # [n_experts]
-        
-        # 归一化实际使用次数
+        # 归一化：fi 表示各专家的相对使用频率
         fi = ce * self.n_routed_experts
         
-        # 辅助损失
+        # 辅助损失 = 预测概率 × 实际使用频率，再乘以 alpha
         aux_loss = (Pi * fi).sum() * self.alpha
-        
-        return aux_loss
 ```
 
-**关键步骤**：
+**关键理解**：
 
-1. **统计实际使用**：通过 one-hot 编码统计每个专家被选中的次数
-   ```python
-   # topk_idx: [batch, seq*top_k] 例如 [8, 2048]
-   # 展平后 one-hot: [batch*seq*top_k, n_experts]
-   mask_ce = F.one_hot(topk_idx.view(-1), num_classes=n_experts)
-   ce = mask_ce.float().mean(0)  # 平均每个 token 选择各专家的频率
-   ```
+1. **`ce` (count estimate)**：统计 batch 中每个专家被 top-k 选中的平均次数
+2. **`Pi`**：门控网络对各专家的平均预测概率
+3. **乘积 `Pi * fi`**：当某个专家既被频繁选中（`fi` 大）又有高预测概率（`Pi` 大）时，贡献更多损失
+4. **最小化效果**：惩罚"赢者通吃"模式，促进负载均衡
 
-2. **计算门控概率**：对所有 token 的门控输出求平均
-   ```python
-   Pi = scores.mean(0)  # [n_experts]
-   ```
-
-3. **归一化**：`fi = ce * n_experts` 确保 $\sum f_i = 1$
-
-4. **加权求和**：`(Pi * fi).sum()` 计算不均衡性
-
-**序列级辅助损失**：
+**序列级辅助损失**（当 `seq_aux=True`，MiniMind 默认设置）：
 
 ```python
 if self.seq_aux:
-    scores_for_seq_aux = scores.view(bsz, seq_len, -1)
+    scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
     
     # 统计每个序列中各专家的使用次数
-    ce = torch.zeros(bsz, self.n_routed_experts, device=scores.device)
+    ce = torch.zeros(bsz, self.n_routed_experts, device=hidden_states.device)
     ce.scatter_add_(
         1, 
-        topk_idx_for_aux_loss,  # [bsz, seq*top_k]
-        torch.ones(bsz, seq_len * self.top_k, device=scores.device)
-    ).div_(seq_len * self.top_k / self.n_routed_experts)
+        topk_idx_for_aux_loss,
+        torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device)
+    ).div_(seq_len * aux_topk / self.n_routed_experts)
     
     # 每个序列的平均门控概率
-    Pi_seq = scores_for_seq_aux.mean(dim=1)  # [bsz, n_experts]
-    
-    # 序列级损失，再求平均
-    aux_loss = (ce * Pi_seq).sum(dim=1).mean() * self.alpha
+    aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(dim=1).mean() * self.alpha
 ```
 
 **序列级 vs 全局级**：
@@ -1148,13 +1142,20 @@ alpha = alpha_max * (1 - epoch / total_epochs) + alpha_min
 
 ### 辅助损失的反向传播
 
-辅助损失需要加入到总损失中才能影响梯度：
+辅助损失需要加入到总损失中才能影响梯度。在 MiniMind 中，这部分已经内置在模型输出中：
 
 ```python
-# 主损失
-loss = criterion(logits, labels)
+# 在训练循环中（my_train.py）
+outputs = self.model(input_ids)
 
-# MoE 辅助损失
+# 计算主损失（交叉熵）
+loss = self.criterion(
+    outputs.logits.view(-1, self.base_model.config.vocab_size),
+    labels.view(-1)
+).view(labels.size())
+loss = (loss * loss_mask).sum() / loss_mask.sum()
+
+# 添加 MoE 辅助损失（如果存在）
 if hasattr(outputs, 'aux_loss') and outputs.aux_loss is not None:
     loss = loss + outputs.aux_loss
 
@@ -1162,26 +1163,21 @@ if hasattr(outputs, 'aux_loss') and outputs.aux_loss is not None:
 loss.backward()
 ```
 
-**注意事项**：
+**MiniMind 的实现细节**：
 
-1. **分离主任务梯度**：某些实现会对辅助损失使用 `.detach()`，防止影响主任务的梯度流
-   ```python
-   loss = main_loss + aux_loss.detach()  # 辅助损失只影响门控参数
-   ```
+辅助损失的累加在 `MiniMindModel.forward` 中自动完成：
 
-2. **梯度累积**：在使用梯度累积时，辅助损失也应相应归一化
-   ```python
-   loss = (main_loss + aux_loss) / accumulation_steps
-   ```
+```python
+# minimind.py 中的实现
+aux_loss = sum(
+    layer.mlp.aux_loss
+    for layer in self.layers
+    if isinstance(layer.mlp, MOEFeedForward)
+)
+return hidden_states, presents, aux_loss
+```
 
-3. **多层 MoE**：当多层都使用 MoE 时，需要累加各层的辅助损失
-   ```python
-   aux_loss = sum(
-       layer.mlp.aux_loss 
-       for layer in model.layers 
-       if isinstance(layer.mlp, MOEFeedForward)
-   )
-   ```
+这意味着当使用多层 MoE 时，各层的辅助损失会自动累加，无需在训练代码中手动处理。
 
 ---
 
