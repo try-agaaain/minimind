@@ -1,3 +1,3 @@
-[submodule "dataset"]
-	path = dataset
-	url = https://github.com/VeejaLiu/ScienceFictionCollection.git
+[submodule "fiction-dataset"]
+	path = fiction-dataset
+	url = git@github.com:try-agaaain/ScienceFictionCollection.git
