@@ -57,13 +57,15 @@ class MinimindDataset(Dataset):
             token_ids = token_ids + [0] * (self.max_seq_len - len(token_ids))
             
         token_ids = torch.tensor(token_ids, dtype=torch.long)
-        # 创建 loss_mask：padding token (0) 位置的 mask 为 0，其他位置为 1
         
+        # input_ids：当前 token；labels：下一个 token
+        input_ids = torch.concat([torch.tensor([0]), token_ids[:-1]])
+        labels = token_ids  # 或使用 torch.concat([token_ids[1:], torch.tensor([0])])
         
-        pre_token_ids =torch.concat([torch.tensor([0]), token_ids[:-1]])
-        post_token_ids = torch.concat([token_ids[1:], torch.tensor([0])])
-        loss_mask = (post_token_ids!= 0).long()
-        return pre_token_ids, post_token_ids, loss_mask
+        # loss_mask：标记非 padding 位置（padding token 为 0）
+        loss_mask = (labels != 0).long()
+        
+        return input_ids, labels, loss_mask
     
     def get_token(self, idx):
         return self.tokenizer.tokenize(self[idx])
@@ -196,7 +198,7 @@ if __name__ == "__main__":
     dataset = MinimindDataset(
         tokenizer = lm_tokenizer,
         dataset_path="all_processed_chunks.jsonl", 
-        char_block_size=1024,
+        max_seq_len=1024,
         char_overlap=256,
         corpus_path_list=file_list,
     )
