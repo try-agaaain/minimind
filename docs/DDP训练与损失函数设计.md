@@ -241,45 +241,105 @@ Ring-AllReduce 用一个巧妙的方法解决了这两个问题。
 
 **阶段 1：Reduce-Scatter（聚合并分发）**
 
-首先，将每个 GPU 的梯度向量分成 N 段（N 是 GPU 数量）。然后进行 N-1 轮传递。在每一轮中，每个 GPU 将自己"负责"的段发送给下一个 GPU，同时接收上一个 GPU 发来的段并累加：
+首先，将每个 GPU 的梯度向量分成 N 段（N 是 GPU 数量）。关键规则是：**每个 GPU "负责" 一个段的最终聚合**——GPU0 负责段 0，GPU1 负责段 1，以此类推。
+
+算法需要 N-1 轮，每轮中：
+- 每个 GPU 将自己**刚累加过的段**发送给环中的下一个 GPU
+- 同时接收上一个 GPU 发来的段，累加到对应位置
+
+为什么是 N-1 轮？因为一个段要"绕环一圈"被所有 GPU 累加，需要经过 N-1 次传递。
+
+让我们用 4 个 GPU 详细演示：
 
 ```
-初始状态（每个 GPU 有 4 段数据）：
-GPU0: [a0, b0, c0, d0]
-GPU1: [a1, b1, c1, d1]
-GPU2: [a2, b2, c2, d2]
-GPU3: [a3, b3, c3, d3]
+初始状态（每个 GPU 有 4 段数据，用 [段0, 段1, 段2, 段3] 表示）：
+GPU0: [a0, b0, c0, d0]    GPU0 负责段 0 的最终聚合
+GPU1: [a1, b1, c1, d1]    GPU1 负责段 1 的最终聚合
+GPU2: [a2, b2, c2, d2]    GPU2 负责段 2 的最终聚合
+GPU3: [a3, b3, c3, d3]    GPU3 负责段 3 的最终聚合
 
-第 1 轮：
-  GPU0 发送 d0 给 GPU1，接收 GPU3 的 a3，累加到 a 段
-  GPU1 发送 a1 给 GPU2，接收 GPU0 的 d0，累加到 d 段
-  GPU2 发送 b2 给 GPU3，接收 GPU1 的 a1，累加到 a 段
-  GPU3 发送 c3 给 GPU0，接收 GPU2 的 b2，累加到 b 段
+第 1 轮（每个 GPU 发送自己"负责段"左边一位的段）：
+  GPU0 发送段3(d0) → GPU1，接收 GPU3 的段0(a3)，累加到段0: a0+a3
+  GPU1 发送段0(a1) → GPU2，接收 GPU0 的段3(d0)，累加到段3: d1+d0
+  GPU2 发送段1(b2) → GPU3，接收 GPU1 的段0(a1)，累加到段0: a2+a1
+  GPU3 发送段2(c3) → GPU0，接收 GPU2 的段1(b2)，累加到段1: b3+b2
 
-结果：
-GPU0: [a0+a3, b0, c0+c3, d0]
-GPU1: [a1, b1, c1, d1+d0]
-GPU2: [a2+a1, b2, c2, d2]
-GPU3: [a3, b3+b2, c3, d3]
+第 1 轮后：
+GPU0: [a0+a3,   b0,       c0+c3,   d0     ]
+GPU1: [a1,      b1,       c1,      d1+d0  ]
+GPU2: [a2+a1,   b2,       c2,      d2     ]
+GPU3: [a3,      b3+b2,    c3,      d3     ]
 
-第 2 轮：继续发送和累加...
-第 3 轮：完成...
+第 2 轮（发送刚累加过的段）：
+  GPU0 发送段2(c0+c3) → GPU1，接收 GPU3 的段0(a3+a2): a0+a3+a2
+  GPU1 发送段3(d1+d0) → GPU2，接收 GPU0 的段2(c0+c3): c1+c0+c3
+  GPU2 发送段0(a2+a1) → GPU3，接收 GPU1 的段3(d1+d0): d2+d1+d0
+  GPU3 发送段1(b3+b2) → GPU0，接收 GPU2 的段0(a2+a1): a3+a2+a1
 
-最终 Reduce-Scatter 结果：
-GPU0: [a0+a1+a2+a3, -, -, -]  (只有第一段是完整的)
-GPU1: [-, b0+b1+b2+b3, -, -]  (只有第二段是完整的)
-GPU2: [-, -, c0+c1+c2+c3, -]  (只有第三段是完整的)
-GPU3: [-, -, -, d0+d1+d2+d3]  (只有第四段是完整的)
+第 2 轮后：
+GPU0: [a0+a3+a2,     b0+b3+b2,    c0+c3,       d0          ]
+GPU1: [a1,           b1,          c1+c0+c3,    d1+d0       ]
+GPU2: [a2+a1,        b2,          c2,          d2+d1+d0    ]
+GPU3: [a3+a2+a1,     b3+b2,       c3,          d3          ]
+
+第 3 轮（最后一轮）：
+  GPU0 发送段1(b0+b3+b2) → GPU1，接收完整段0: a0+a1+a2+a3 ✓
+  GPU1 发送段2(c1+c0+c3) → GPU2，接收完整段1: b1+b0+b3+b2 ✓
+  GPU2 发送段3(d2+d1+d0) → GPU3，接收完整段2: c2+c1+c0+c3 ✓
+  GPU3 发送段0(a3+a2+a1) → GPU0，接收完整段3: d3+d2+d1+d0 ✓
+
+Reduce-Scatter 完成后：
+GPU0: [★a_sum, -,      -,      -     ]  只有段0是完整聚合
+GPU1: [-,      ★b_sum, -,      -     ]  只有段1是完整聚合
+GPU2: [-,      -,      ★c_sum, -     ]  只有段2是完整聚合
+GPU3: [-,      -,      -,      ★d_sum]  只有段3是完整聚合
 ```
 
 **阶段 2：AllGather（全员收集）**
 
-现在每个 GPU 持有完整聚合结果的 1/N。再进行 N-1 轮传递，这次只转发（不累加），让每个 GPU 都收集到完整结果：
+现在每个 GPU 持有完整聚合结果的 1/4。接下来需要让每个 GPU 都获得完整的 4 段。
+
+同样需要 N-1 轮，规则类似但**不再累加，只是转发**：
 
 ```
-经过 N-1 轮 AllGather 后，每个 GPU 都有：
-[a0+a1+a2+a3, b0+b1+b2+b3, c0+c1+c2+c3, d0+d1+d2+d3]
+AllGather 第 1 轮（每个 GPU 发送自己拥有的完整段）：
+  GPU0 发送 a_sum → GPU1
+  GPU1 发送 b_sum → GPU2
+  GPU2 发送 c_sum → GPU3
+  GPU3 发送 d_sum → GPU0
+
+第 1 轮后：
+GPU0: [★a_sum, -,      -,      ★d_sum]  有了段0和段3
+GPU1: [★a_sum, ★b_sum, -,      -     ]  有了段0和段1
+GPU2: [-,      ★b_sum, ★c_sum, -     ]  有了段1和段2
+GPU3: [-,      -,      ★c_sum, ★d_sum]  有了段2和段3
+
+AllGather 第 2 轮（发送刚收到的段）：
+  GPU0 发送 d_sum → GPU1
+  GPU1 发送 a_sum → GPU2
+  GPU2 发送 b_sum → GPU3
+  GPU3 发送 c_sum → GPU0
+
+第 2 轮后：
+GPU0: [★a_sum, -,      ★c_sum, ★d_sum]  有了3段
+GPU1: [★a_sum, ★b_sum, -,      ★d_sum]  有了3段
+GPU2: [★a_sum, ★b_sum, ★c_sum, -     ]  有了3段
+GPU3: [-,      ★b_sum, ★c_sum, ★d_sum]  有了3段
+
+AllGather 第 3 轮：
+  GPU0 发送 c_sum → GPU1
+  GPU1 发送 d_sum → GPU2
+  GPU2 发送 a_sum → GPU3
+  GPU3 发送 b_sum → GPU0
+
+最终结果 - 每个 GPU 都有完整的聚合梯度：
+GPU0: [★a_sum, ★b_sum, ★c_sum, ★d_sum] ✓
+GPU1: [★a_sum, ★b_sum, ★c_sum, ★d_sum] ✓
+GPU2: [★a_sum, ★b_sum, ★c_sum, ★d_sum] ✓
+GPU3: [★a_sum, ★b_sum, ★c_sum, ★d_sum] ✓
 ```
+
+**总结**：整个 Ring-AllReduce 需要 2×(N-1) 轮通信。前 N-1 轮（Reduce-Scatter）让每个 GPU 持有 1/N 的完整聚合结果；后 N-1 轮（AllGather）让所有 GPU 都获得完整结果。
 
 **为什么这样更高效？**
 
