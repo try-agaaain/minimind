@@ -102,8 +102,8 @@ class MinimindDataset(Dataset):
             f.write('\n'.join(all_records))
        
         print(f"\n--- 处理完成 ---\n总共生成 {total_chunks_count} 个切块，保存到 {self.dataset_path}")
-        self.data = [json.loads(line) for line in all_records]
-        return self
+        data = [json.loads(line) for line in all_records]
+        return data
 
 def train_tokenizer(
     vocab_size: int = 6400,
@@ -206,4 +206,5 @@ if __name__ == "__main__":
     
     print(dataset[0])
     print(dataset.get_token(0))
+    print(len(dataset))
     
