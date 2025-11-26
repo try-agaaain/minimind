@@ -36,8 +36,6 @@ class MinimindDataset(Dataset):
             length_function=len,
         )
         self.data = []
-        # 缓存已处理的 token_ids，避免重复计算
-        self._token_cache = {}
         if os.path.exists(dataset_path):
             with open(dataset_path, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -50,11 +48,7 @@ class MinimindDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        # 检查缓存中是否已有该索引的处理结果
-        if idx in self._token_cache:
-            return self._token_cache[idx]
-        
-        token_ids = self.tokenizer.encode(self.data[idx]["text"])
+        token_ids = self.data[idx]["token_ids"]
         
         # 截断或填充
         if len(token_ids) > self.max_seq_len:
@@ -71,11 +65,7 @@ class MinimindDataset(Dataset):
         # loss_mask：标记非 padding 位置（padding token 为 0）
         loss_mask = (labels != 0).long()
         
-        result = (input_ids, labels, loss_mask)
-        # 缓存结果
-        self._token_cache[idx] = result
-        
-        return result
+        return input_ids, labels, loss_mask
     
     def get_token(self, idx):
         return self.tokenizer.tokenize(self.data[idx]["text"])
@@ -100,7 +90,8 @@ class MinimindDataset(Dataset):
                 for doc in chunks:
                     chunk = doc.page_content.strip()
                     if chunk:
-                        record = {"text": chunk}
+                        token_ids = self.tokenizer.encode(chunk)
+                        record = {"text": chunk, "token_ids": token_ids}
                         all_records.append(json.dumps(record, ensure_ascii=False))
                         total_chunks_count += 1
 

@@ -23,11 +23,10 @@ from my_dataset import MinimindDataset, train_tokenizer
 class Trainer:
     """MiniMind 分布式训练器 (DDP)"""
     
-    def __init__(self, args, rank, world_size, dataset: MinimindDataset, tokenizer):
+    def __init__(self, args, rank, world_size, dataset: MinimindDataset):
         self.args = args
         self.rank = rank
         self.world_size = world_size
-        self.tokenizer = tokenizer
 
         # 核心 DDP 逻辑：使用 local_rank 绑定到唯一的 GPU
         if args.local_rank == -1 or world_size == 0:
@@ -190,7 +189,6 @@ class Trainer:
         
         # 保存配置和 tokenizer
         self.base_model.config.save_pretrained(str(output_dir))
-        self.tokenizer.save_pretrained(str(output_dir / "tokenizer"))
         print(f"✅ 已保存到: {output_dir}")
 
 
@@ -270,7 +268,7 @@ def main():
                               max_seq_len=args.max_seq_len,
                               corpus_path_list=file_list)
 
-    trainer = Trainer(args, rank, world_size, dataset, tokenizer)
+    trainer = Trainer(args, rank, world_size, dataset)
     trainer.train()
 
 if __name__ == "__main__":
