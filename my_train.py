@@ -253,18 +253,10 @@ def main():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
-    tokenizer = None
     dataset_dir = Path(__file__).parent / "dataset"
     file_list = list(map(str, dataset_dir.rglob("*.txt")))
-    if os.path.exists(args.tokenizer_path):
-        tokenizer = PreTrainedTokenizerFast(tokenizer_file=args.tokenizer_path)
-    else:
-        
-        tokenizer = train_tokenizer(vocab_size=6400, 
-                                       file_list=file_list, 
-                                       algorithm="unigram", output_filename=args.tokenizer_path)
     dataset = MinimindDataset(args.pretrain_path, 
-                              tokenizer=tokenizer,
+                              tokenizer_path=args.tokenizer_path,
                               max_seq_len=args.max_seq_len,
                               corpus_path_list=file_list)
 

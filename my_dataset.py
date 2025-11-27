@@ -16,7 +16,7 @@ class MinimindDataset(Dataset):
 
     def __init__(self, 
             dataset_path: str,
-            tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+            tokenizer_path: str,
             max_seq_len: int = 1024,  # LangChain 中的 chunk_size
             char_overlap: int = 256,     # LangChain 中的 chunk_overlap
             corpus_path_list: Union[str, List[str]] = "book_corpus/*.txt",
@@ -24,6 +24,17 @@ class MinimindDataset(Dataset):
         """初始化处理器和 LangChain 切分器。"""
         self.corpus_path_list = corpus_path_list
         self.dataset_path = Path(dataset_path)
+        
+        tokenizer = None
+
+        if os.path.exists(tokenizer_path):
+            tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
+        else:
+            
+            tokenizer = train_tokenizer(vocab_size=6400, 
+                                        file_list=corpus_path_list, 
+                                        algorithm="unigram", output_filename=tokenizer_path)
+        
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         
