@@ -11,7 +11,8 @@ from tokenizers import Tokenizer
 from tokenizers.models import Unigram, BPE
 from tokenizers.trainers import UnigramTrainer, BpeTrainer
 from tokenizers.pre_tokenizers import Metaspace, Whitespace
-
+import re
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 class MinimindDataset(Dataset):
 
     def __init__(self, 
@@ -59,22 +60,33 @@ class MinimindDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, idx):
-        token_ids = self.data[idx]["token_ids"]
-        
-        # 截断或填充
-        if len(token_ids) > self.max_seq_len:
-            token_ids = token_ids[:self.max_seq_len]
-        else:
-            token_ids = token_ids + [0] * (self.max_seq_len - len(token_ids))
+        # 检查是否存在 input_ids，如果不存在则生成并保存
+        if "input_ids" not in self.data[idx]:
+            text = self.data[idx].get("text", "")
+            token_ids = self.tokenizer.encode(text)
             
-        token_ids = torch.tensor(token_ids, dtype=torch.long)
-        
-        # input_ids：当前 token；labels：下一个 token
-        input_ids = torch.concat([torch.tensor([0]), token_ids[:-1]])
-        labels = token_ids  # 或使用 torch.concat([token_ids[1:], torch.tensor([0])])
-        
-        # loss_mask：标记非 padding 位置（padding token 为 0）
-        loss_mask = (labels != 0).long()
+            # 截断或填充
+            if len(token_ids) > self.max_seq_len:
+                token_ids = token_ids[:self.max_seq_len]
+            else:
+                token_ids = token_ids + [0] * (self.max_seq_len - len(token_ids))
+            
+            token_ids_tensor = torch.tensor(token_ids, dtype=torch.long)
+            
+            # 生成 input_ids、labels、loss_mask
+            input_ids = torch.concat([torch.tensor([0]), token_ids_tensor[:-1]])
+            labels = token_ids_tensor
+            loss_mask = (labels != 0).long()
+            
+            # 保存到 self.data 中（存放 torch tensor）
+            self.data[idx]["input_ids"] = input_ids
+            self.data[idx]["labels"] = labels
+            self.data[idx]["loss_mask"] = loss_mask
+        else:
+            # 从 self.data 中读取
+            input_ids = self.data[idx]["input_ids"]
+            labels = self.data[idx]["labels"]
+            loss_mask = self.data[idx]["loss_mask"]
         
         return input_ids, labels, loss_mask
     
@@ -101,8 +113,10 @@ class MinimindDataset(Dataset):
                 for doc in chunks:
                     chunk = doc.page_content.strip()
                     if chunk:
-                        token_ids = self.tokenizer.encode(chunk)
-                        record = {"text": chunk, "token_ids": token_ids}
+                        # 为样本添加开始和结束标识
+                        chunk_with_markers = f"<s>{chunk}</s>"
+                        token_ids = self.tokenizer.encode(chunk_with_markers)
+                        record = {"text": chunk_with_markers}
                         all_records.append(json.dumps(record, ensure_ascii=False))
                         total_chunks_count += 1
 
