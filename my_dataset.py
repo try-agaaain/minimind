@@ -17,8 +17,8 @@ class MinimindDataset(Dataset):
     def __init__(self, 
             dataset_path: str,
             tokenizer_path: str,
-            max_seq_len: int = 1024,  # LangChain 中的 chunk_size
-            char_overlap: int = 256,     # LangChain 中的 chunk_overlap
+            max_seq_len: int = 256,  # LangChain 中的 chunk_size
+            char_overlap: int = 64,     # LangChain 中的 chunk_overlap
             corpus_path_list: Union[str, List[str]] = "book_corpus/*.txt",
     ) -> None:
         """初始化处理器和 LangChain 切分器。"""

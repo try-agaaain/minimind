@@ -211,7 +211,7 @@ def main():
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--num_layers", type=int, default=8)
     parser.add_argument("--num_heads", type=int, default=8)
-    parser.add_argument("--max_seq_len", type=int, default=1024)
+    parser.add_argument("--max_seq_len", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--use_moe", action="store_true")
     
