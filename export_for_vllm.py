@@ -182,7 +182,10 @@ from vllm import LLM, SamplingParams
 llm = LLM(model="{output_dir}")
 sampling_params = SamplingParams(temperature=0.8, max_tokens=100)
 outputs = llm.generate(["你好，"], sampling_params)
-print(outputs[0].outputs[0].text)
+
+# 注意: 确保 outputs 不为空再访问
+if outputs and outputs[0].outputs:
+    print(outputs[0].outputs[0].text)
 ```
 
 ### 启动 OpenAI 兼容 API 服务

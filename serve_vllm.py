@@ -26,7 +26,7 @@ from pathlib import Path
 def check_vllm_installed():
     """检查 vLLM 是否已安装"""
     try:
-        import vllm
+        import vllm  # noqa: F401
         return True
     except ImportError:
         return False
@@ -328,24 +328,20 @@ def main():
 
     args = parser.parse_args()
 
-    # 如果没有指定命令，默认为 serve
+    # 如果没有指定命令，默认为 serve 并使用默认参数
     if args.command is None:
-        # 检查是否有位置参数或 --model_path
-        parser.add_argument(
-            "--model_path",
-            type=str,
-            default="./minimind_hf_model",
-            help="HuggingFace 格式的模型路径"
+        # 使用默认参数启动 serve
+        start_vllm_server(
+            model_path="./minimind_hf_model",
+            host="0.0.0.0",
+            port=8000,
+            max_model_len=None,
+            gpu_memory_utilization=0.9,
+            tensor_parallel_size=1,
+            dtype="auto",
+            served_model_name="minimind",
         )
-        parser.add_argument("--host", type=str, default="0.0.0.0")
-        parser.add_argument("--port", type=int, default=8000)
-        parser.add_argument("--max_model_len", type=int, default=None)
-        parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
-        parser.add_argument("--tensor_parallel_size", type=int, default=1)
-        parser.add_argument("--dtype", type=str, default="auto")
-        parser.add_argument("--served_model_name", type=str, default="minimind")
-        args = parser.parse_args()
-        args.command = "serve"
+        return
 
     if args.command == "serve":
         start_vllm_server(
