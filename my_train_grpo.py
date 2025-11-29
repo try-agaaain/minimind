@@ -180,7 +180,13 @@ def get_per_token_logps(model, input_ids: torch.Tensor, n_keep: int) -> torch.Te
     Returns:
         每个 token 的对数概率 [B, n_keep]
     """
-    with torch.no_grad() if not model.training else torch.enable_grad():
+    # 根据模型的训练状态选择适当的上下文管理器
+    if model.training:
+        ctx = torch.enable_grad()
+    else:
+        ctx = torch.no_grad()
+    
+    with ctx:
         logits = model(input_ids, logits_to_keep=n_keep + 1).logits[:, :-1, :]
         
         per_token_logps = []

@@ -93,11 +93,13 @@ def apply_lora(model: nn.Module, rank: int = 8, alpha: float = 1.0, target_modul
                 setattr(module, "lora", lora)
                 original_forward = module.forward
                 
-                # 显式绑定
-                def forward_with_lora(x, layer1=original_forward, layer2=lora):
-                    return layer1(x) + layer2(x)
+                # 使用闭包工厂函数来正确捕获变量
+                def make_forward_with_lora(orig_forward, lora_module):
+                    def forward_with_lora(x):
+                        return orig_forward(x) + lora_module(x)
+                    return forward_with_lora
                 
-                module.forward = forward_with_lora
+                module.forward = make_forward_with_lora(original_forward, lora)
 
 
 def load_lora(model: nn.Module, path: str):
