@@ -44,8 +44,9 @@ class MinimindDataset(Dataset):
             chunk_size=max_seq_len,
             chunk_overlap=char_overlap,
             # 默认分隔符通常是基于换行符和空格，适用于通用文本
-            separators=["\n", " ", ""], 
+            separators=["\n", "(?<=。)", "(?<=，)"], 
             length_function=len,
+            is_separator_regex=True,
         )
         self.data = []
         if os.path.exists(dataset_path):

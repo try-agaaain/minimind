@@ -16,7 +16,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from minimind import MiniMindConfig, MiniMindForCausalLM
-from dataset import MiniMindTokenizerFast, NovelDatasetPreparator, MinimindDataset 
+from dataset import NovelDatasetPreparator, MinimindDataset
+from transformers import PreTrainedTokenizerFast 
 
 
 class Trainer:
@@ -57,7 +58,9 @@ class Trainer:
         if self.world_size > 1:
             dist.barrier() 
 
-        self.tokenizer = MiniMindTokenizerFast.from_pretrained(tokenizer_path)
+        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
+        if self.rank == 0:
+            print(f"✅ 已加载 Tokenizer (词表大小: {self.tokenizer.vocab_size})")
         
         # 初始化模型配置
         config = MiniMindConfig(
@@ -103,7 +106,11 @@ class Trainer:
         
         # --- 数据加载器和 Sampler ---
         if args.use_jsonl and os.path.exists(args.data_path):
-            dataset = MinimindDataset(args.data_path, max_length=args.max_seq_len)
+            dataset = MinimindDataset(
+                args.data_path, 
+                max_length=args.max_seq_len,
+                tokenizer_path=args.tokenizer_path
+            )
         else:
             raise FileNotFoundError(f"⚠️  数据路径不存在或未指定 JSONL 格式: {args.data_path}")
         
@@ -226,14 +233,14 @@ def main():
     parser.add_argument("--chunk_size", type=int, default=1024)
     parser.add_argument("--chunk_overlap", type=int, default=128)
     parser.add_argument("--vocab_size", type=int, default=6400)
-    parser.add_argument("--tokenizer_path", type=str, default="./dataset/tokenizer")
-    parser.add_argument("--pretrain_path", type=str, default="./dataset/pretrain.jsonl")
+    parser.add_argument("--tokenizer_path", type=str, default="unigram_tokenizer.json")
+    parser.add_argument("--pretrain_path", type=str, default="./all_processed_chunks.jsonl")
     
     # 模型配置
     parser.add_argument("--hidden_size", type=int, default=512)
     parser.add_argument("--num_layers", type=int, default=8)
     parser.add_argument("--num_heads", type=int, default=8)
-    parser.add_argument("--max_seq_len", type=int, default=512)
+    parser.add_argument("--max_seq_len", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--use_moe", action="store_true")
     
@@ -247,8 +254,8 @@ def main():
     parser.add_argument("--use_scheduler", action="store_true")
     
     # 数据配置
-    parser.add_argument("--use_jsonl", action="store_true")
-    parser.add_argument("--data_path", type=str, default="./dataset/pretrain.jsonl")
+    parser.add_argument("--use_jsonl", default=True, help="是否使用 JSONL 格式的数据集")
+    parser.add_argument("--data_path", type=str, default="./all_processed_chunks.jsonl")
     
     # 检查点配置
     parser.add_argument("--save_interval", type=int, default=1, help="每多少轮保存一次模型")

@@ -87,7 +87,7 @@ class ModelInferenceTester:
         return model
     
     @torch.no_grad()
-    def generate(self, prompt: str, temperature: float = 0.8, top_k: int = 50) -> str:
+    def generate(self, prompt: str, temperature: float = 0.0, top_k: int = 1) -> str:
         """
         生成文本
         
@@ -141,7 +141,7 @@ class ModelInferenceTester:
         test_cases = [
             {
                 "name": "测试用例1: 基础文本完成",
-                "prompt": "今天天气",
+                "prompt": "\n",
                 "description": "测试模型基础的文本续写能力"
             },
             {
@@ -257,8 +257,8 @@ def main():
                         help="分词器路径 (default: ./unigram_tokenizer.json)")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="运行设备 (default: cuda if available else cpu)")
-    parser.add_argument("--max_new_tokens", type=int, default=50,
-                        help="最大生成 token 数 (default: 50)")
+    parser.add_argument("--max_new_tokens", type=int, default=512,
+                        help="最大生成 token 数 (default: 512)")
     parser.add_argument("--save_results", type=str, default=None,
                         help="保存结果到文件 (可选)")
     

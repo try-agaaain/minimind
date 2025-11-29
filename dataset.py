@@ -159,11 +159,10 @@ class NovelDatasetPreparator:
         self.pretrain_path = Path(pretrain_path)
         
         # 初始化 tokenizer
-        tokenizer_file = Path(tokenizer_path) if tokenizer_path else None
-        if tokenizer_file and tokenizer_file.exists():
-            self.tokenizer = MiniMindTokenizerFast.from_pretrained(str(tokenizer_file.parent))
-        else:
-            self.tokenizer = None
+        self.tokenizer = None
+        if tokenizer_path and os.path.exists(tokenizer_path):
+            self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
+            print(f"✅ 已加载 Tokenizer (词表大小: {self.tokenizer.vocab_size})")
         
         # 文本分割器
         self.splitter = RecursiveCharacterTextSplitter(
@@ -235,22 +234,39 @@ class NovelDatasetPreparator:
 
 
 class MinimindDataset(Dataset):
-    """从 JSONL 文件加载已 tokenized 的数据"""
+    """从 JSONL 文件加载已 tokenized 的数据，支持动态分词"""
     
-    def __init__(self, jsonl_path: str, max_length: int = 512):
+    def __init__(self, jsonl_path: str, max_length: int = 512, tokenizer_path: Optional[str] = None):
         self.data = []
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 if line.strip():
                     self.data.append(json.loads(line))
-        
+                            
         self.max_length = max_length
+        
+        # 初始化 tokenizer
+        self.tokenizer = None
+        if tokenizer_path and os.path.exists(tokenizer_path):
+            self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
+            print(f"✅ 已加载 Tokenizer (词表大小: {self.tokenizer.vocab_size})")
     
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        token_ids = self.data[idx]["token_ids"]
+        # 检查是否存在 token_ids，如果不存在则使用 tokenizer 分词
+        if "token_ids" not in self.data[idx]:
+            if self.tokenizer is None:
+                raise ValueError(f"缺少 token_ids 且未提供 tokenizer，无法处理样本 {idx}")
+            
+            text = self.data[idx].get("text", "")
+            token_ids = self.tokenizer.encode(text)
+            
+            # 保存到 self.data 中，避免重复分词
+            self.data[idx]["token_ids"] = token_ids
+        else:
+            token_ids = self.data[idx]["token_ids"]
         
         # 截断或填充
         if len(token_ids) > self.max_length:
