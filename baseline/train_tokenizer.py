@@ -12,15 +12,24 @@ import os
 random.seed(42)
 
 
-def train_tokenizer():
+def train_tokenizer(data_path='../dataset/pretrain.jsonl', tokenizer_dir='../model/', vocab_size=6400):
+    """
+    训练baseline风格的tokenizer
+    
+    Args:
+        data_path: JSONL格式的数据路径，包含'text'字段
+        tokenizer_dir: tokenizer保存目录
+        vocab_size: 词表大小
+    
+    Returns:
+        tokenizer_dir: 保存tokenizer的目录路径
+    """
     # 读取JSONL文件并提取文本数据
     def read_texts_from_jsonl(file_path):
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 data = json.loads(line)
                 yield data['text']
-
-    data_path = '../dataset/pretrain.jsonl'
 
     # 初始化tokenizer
     tokenizer = Tokenizer(models.BPE())
@@ -31,7 +40,7 @@ def train_tokenizer():
 
     # 设置训练器并添加特殊token
     trainer = trainers.BpeTrainer(
-        vocab_size=6400,
+        vocab_size=vocab_size,
         special_tokens=special_tokens,  # 确保这三个token被包含
         show_progress=True,
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
@@ -52,10 +61,9 @@ def train_tokenizer():
     assert tokenizer.token_to_id("<|im_end|>") == 2
 
     # 保存tokenizer
-    tokenizer_dir = "../model/"
     os.makedirs(tokenizer_dir, exist_ok=True)
     tokenizer.save(os.path.join(tokenizer_dir, "tokenizer.json"))
-    tokenizer.model.save("../model/")
+    tokenizer.model.save(tokenizer_dir)
 
     # 手动创建配置文件
     config = {
@@ -106,14 +114,21 @@ def train_tokenizer():
     with open(os.path.join(tokenizer_dir, "tokenizer_config.json"), "w", encoding="utf-8") as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=4)
 
-    print("Tokenizer training completed and saved.")
+    print(f"Tokenizer training completed and saved to {tokenizer_dir}")
+    return tokenizer_dir
 
 
-def eval_tokenizer():
+def eval_tokenizer(tokenizer_dir='../model/'):
+    """
+    评估训练好的tokenizer
+    
+    Args:
+        tokenizer_dir: tokenizer保存目录
+    """
     from transformers import AutoTokenizer
 
     # 加载预训练的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("../model/")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
 
     messages = [
         {"role": "system", "content": "你是一个优秀的聊天机器人，总是给我正确的回应！"},
@@ -139,8 +154,8 @@ def eval_tokenizer():
 
 
 def main():
-    train_tokenizer()
-    eval_tokenizer()
+    tokenizer_dir = train_tokenizer()
+    eval_tokenizer(tokenizer_dir)
 
 
 if __name__ == '__main__':
